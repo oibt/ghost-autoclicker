@@ -24,7 +24,7 @@ pyinstaller --onefile --noconsole autoclicker.py
 - "After every N clicks, wait X seconds" pause, and an optional total click limit.
 - Per-point reload: after every N clicks on a point, refresh the page or open a URL (one you type, or for tab points the tab's own address), then wait X seconds.
 - Select several points in the list to edit their settings together. Blank fields and "keep" options leave each point's own value unchanged.
-- Global hotkeys, which work while other apps are focused (polled with `GetAsyncKeyState`):
+- Global hotkeys, which work while other apps are focused (polled with `GetAsyncKeyState`). The defaults are:
 
   | Key | Action |
   |-----|--------|
@@ -32,10 +32,12 @@ pyinstaller --onefile --noconsole autoclicker.py
   | F7  | Add a point under the mouse |
   | F8  | Remove the last point |
 
+  You can change them on the **Hotkeys** tab: click a hotkey and press the new key. Ctrl/Shift/Alt combinations and the middle and side mouse buttons work, Esc cancels, and "Clear" removes a hotkey. If you pick a key another action already uses, it moves to the new action. Hotkeys are saved in `%LOCALAPPDATA%\AutoClicker\settings.json`. Letter and number hotkeys are ignored while you're typing in one of the app's own fields.
+
 ## Interface
 
 - **Click points** (left): the list of points with their type, position, reload setting and a live click count for each point. While clicking in order, the point being clicked is highlighted.
-- **Settings** (right), in four tabs: **Speed** (clicks per second, button, hold time, random offset, click order), **Limits** (breaks and auto-stop), **Browser tabs** (the automation browser) and **Windows** (background/foreground mode and advanced options).
+- **Settings** (right), in five tabs: **Speed** (clicks per second, button, hold time, random offset, click order), **Limits** (breaks and auto-stop), **Browser tabs** (the automation browser), **Windows** (background/foreground mode and advanced options) and **Hotkeys**.
 - **Footer**: the Start/Stop button, the total click count, the current status and the last error.
 - **Light and dark themes.** It follows the Windows app theme on start (including a dark title bar), and the button at the top right switches it.
 

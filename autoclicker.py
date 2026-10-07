@@ -3,7 +3,7 @@ Ghost Auto Clicker (Windows) - v7
 ---------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
-Hotkeys (work even when this window isn't focused):
+Hotkeys (work even when this window isn't focused; change them on the Hotkeys tab):
   F6  = Start / Stop
   F7  = Add a click point where your mouse is right now
   F8  = Remove the last point
@@ -87,7 +87,7 @@ MK_LBUTTON, MK_RBUTTON = 0x0001, 0x0002
 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 GA_ROOT = 2
-VK_F6, VK_F7, VK_F8 = 0x75, 0x76, 0x77
+VK_SHIFT, VK_CONTROL, VK_MENU, VK_ESCAPE = 0x10, 0x11, 0x12, 0x1B
 
 METHOD_AUTO = "Auto (recommended)"
 METHOD_MAIN = "Main window"
@@ -194,6 +194,97 @@ def process_running(exe):
         return exe.lower() in out.lower()
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------- hotkeys & settings
+# A hotkey is (virtual-key code, modifiers), e.g. (0x75, ("Ctrl",)) = Ctrl+F6. None = no hotkey.
+HOTKEY_ACTIONS = (("toggle", "Start / stop"), ("add", "Add point under mouse"), ("remove", "Remove last point"))
+DEFAULT_HOTKEYS = {"toggle": (0x75, ()), "add": (0x76, ()), "remove": (0x77, ())}
+MODIFIERS = (("Ctrl", VK_CONTROL), ("Shift", VK_SHIFT), ("Alt", VK_MENU))
+# Can't be a hotkey on their own: left/right mouse button, modifier keys, Windows keys
+NOT_BINDABLE = {0x01, 0x02, VK_SHIFT, VK_CONTROL, VK_MENU, 0x5B, 0x5C, *range(0xA0, 0xA6)}
+KEY_NAMES = {0x04: "Middle mouse", 0x05: "Mouse 4", 0x06: "Mouse 5", 0x08: "Backspace", 0x09: "Tab",
+             0x0D: "Enter", 0x13: "Pause", 0x14: "Caps Lock", 0x20: "Space", 0x21: "Page Up",
+             0x22: "Page Down", 0x23: "End", 0x24: "Home", 0x25: "Left", 0x26: "Up", 0x27: "Right",
+             0x28: "Down", 0x2C: "Print Screen", 0x2D: "Insert", 0x2E: "Delete", 0x5D: "Menu",
+             0x6A: "Num *", 0x6B: "Num +", 0x6D: "Num -", 0x6E: "Num .", 0x6F: "Num /", 0x90: "Num Lock",
+             0x91: "Scroll Lock", 0xBA: ";", 0xBB: "=", 0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/",
+             0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'"}
+SETTINGS_FILE = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "AutoClicker",
+                             "settings.json")
+
+
+def key_name(vk):
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+        return chr(vk)
+    if 0x60 <= vk <= 0x69:
+        return f"Num {vk - 0x60}"
+    if 0x70 <= vk <= 0x87:
+        return f"F{vk - 0x6F}"
+    return KEY_NAMES.get(vk, f"Key {vk:#04x}")
+
+
+def hotkey_name(hk):
+    if not hk:
+        return "Not set"
+    vk, mods = hk
+    return "+".join([*mods, key_name(vk)])
+
+
+def held_modifiers():
+    return tuple(name for name, vk in MODIFIERS if user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def types_text(hk):
+    """True for a hotkey that is also normal typing (a letter, digit, space, punctuation)."""
+    vk, mods = hk
+    if "Ctrl" in mods or "Alt" in mods:
+        return False
+    return vk == 0x20 or 0x30 <= vk <= 0x5A or 0x60 <= vk <= 0x6F or 0xBA <= vk <= 0xDE
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(data):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+
+def load_hotkeys():
+    hotkeys = dict(DEFAULT_HOTKEYS)
+    saved = load_settings().get("hotkeys")
+    if not isinstance(saved, dict):
+        return hotkeys
+    for action in hotkeys:
+        if action not in saved:
+            continue
+        v = saved[action]
+        try:
+            if v is None:
+                hotkeys[action] = None
+            elif int(v["vk"]) not in NOT_BINDABLE:
+                hotkeys[action] = (int(v["vk"]), tuple(n for n, _ in MODIFIERS if n in v["mods"]))
+        except (TypeError, KeyError, ValueError):
+            pass
+    return hotkeys
+
+
+def save_hotkeys(hotkeys):
+    data = load_settings()
+    data["hotkeys"] = {a: None if hk is None else {"vk": hk[0], "mods": list(hk[1])}
+                       for a, hk in hotkeys.items()}
+    save_settings(data)
 
 
 # ---------------------------------------------------------------- browser connection
@@ -927,7 +1018,7 @@ def style_widgets(root, c):
 
     s.configure("TNotebook", background=c["bg"], bordercolor=c["border"], lightcolor=c["bg"],
                 darkcolor=c["bg"], tabmargins=(0, 0, 0, 0))
-    s.configure("TNotebook.Tab", background=c["button"], foreground=c["muted"], padding=(14, 6),
+    s.configure("TNotebook.Tab", background=c["button"], foreground=c["muted"], padding=(10, 6),
                 bordercolor=c["border"], lightcolor=c["button"], darkcolor=c["button"])
     s.map("TNotebook.Tab", background=[("selected", c["bg"])], foreground=[("selected", c["text"])],
           lightcolor=[("selected", c["bg"])], expand=[("selected", (0, 0, 0, 0))])
@@ -961,6 +1052,8 @@ class App:
         self.dark = system_dark()
         self.flash_job = None
         self.active_row = None
+        self.hotkeys = load_hotkeys()
+        self.capturing = None              # action waiting for a new hotkey
 
         root.title("Ghost Auto Clicker")
         root.minsize(940, 560)
@@ -997,8 +1090,10 @@ class App:
         self.err_lbl.pack(anchor="w")
         keys = ttk.Frame(foot)
         keys.pack(side="right")
-        for key, text in (("F6", "start / stop"), ("F7", "add point"), ("F8", "remove last")):
-            ttk.Label(keys, text=key, style="Key.TLabel").pack(side="left", padx=(12, 4))
+        self.key_lbls = {}
+        for action, text in (("toggle", "start / stop"), ("add", "add point"), ("remove", "remove last")):
+            self.key_lbls[action] = ttk.Label(keys, style="Key.TLabel")
+            self.key_lbls[action].pack(side="left", padx=(12, 4))
             ttk.Label(keys, text=text, style="Muted.TLabel").pack(side="left")
 
         # Body: point list on the left, settings on the right
@@ -1013,6 +1108,7 @@ class App:
         self.build_points(left)
         self.build_settings(right)
 
+        self.update_key_texts()
         self.refresh_points()
         threading.Thread(target=self.hotkey_loop, daemon=True).start()
         self.ui_loop()
@@ -1044,9 +1140,7 @@ class App:
         self.tree.bind("<Double-1>", self.edit_point)
         self.tree.bind("<Delete>", lambda e: self.remove_selected())
         self.tree.bind("<Control-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
-        self.empty_lbl = ttk.Label(self.tree, style="Empty.TLabel", justify="center",
-                                   text="No click points yet\n\nHover over the spot you want clicked and press F7,\n"
-                                        "or use “Add point” for a 3 second countdown.")
+        self.empty_lbl = ttk.Label(self.tree, style="Empty.TLabel", justify="center")
         self.style_tree()
 
         bar = ttk.Frame(parent)
@@ -1143,9 +1237,7 @@ class App:
         self.tab_method = tk.StringVar(value=TAB_REAL)
         self.field(p, 6, "Method", ttk.Combobox(p, textvariable=self.tab_method, values=[TAB_REAL, TAB_JS],
                                                 state="readonly", width=28))
-        self.note(p, 7, "1. Launch it and log in to your sites once (it's a separate profile).\n"
-                        "2. Open each page in its own tab.\n"
-                        "3. Hover the spot in each tab and press F7.")
+        self.tabs_note = self.note(p, 7, "")
 
         # Window points
         p = self.page(nb, "Windows")
@@ -1171,6 +1263,26 @@ class App:
                    command=self.launch_browser).grid(row=8, column=0, columnspan=3, sticky="w", pady=(12, 4))
         self.note(p, 9, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
                         "the Browser tabs page.")
+
+        # Hotkeys
+        p = self.page(nb, "Hotkeys")
+        self.section(p, 0, "Hotkeys", first=True)
+        self.hotkey_btns = {}
+        for r, (action, label) in enumerate(HOTKEY_ACTIONS, start=1):
+            ttk.Label(p, text=label).grid(row=r, column=0, sticky="w", padx=(0, 12), pady=4)
+            self.hotkey_btns[action] = ttk.Button(p, width=14, command=lambda a=action: self.start_capture(a))
+            self.hotkey_btns[action].grid(row=r, column=1, sticky="w", pady=4)
+            ttk.Button(p, text="Clear", style="Ghost.TButton", width=6,
+                       command=lambda a=action: self.set_hotkey(a, None)).grid(row=r, column=2, sticky="w",
+                                                                              padx=(4, 0))
+        ttk.Button(p, text="Reset to F6 / F7 / F8",
+                   command=self.reset_hotkeys).grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
+        self.hotkey_msg = ttk.Label(p, style="Warn.TLabel", wraplength=330, justify="left")
+        self.hotkey_msg.grid(row=5, column=0, columnspan=3, sticky="w")
+        self.note(p, 6, "Click a hotkey, then press the new key. Combinations with Ctrl, Shift and Alt work, "
+                        "and so do the middle and side mouse buttons. Esc cancels.\n\n"
+                        "Hotkeys work even when this window isn't focused, so pick keys you don't need in "
+                        "other apps. Letter and number hotkeys are ignored while you type in this window.")
 
         self.update_speed_hint()
 
@@ -1225,26 +1337,115 @@ class App:
 
     # --- hotkeys (polled so they work while other apps are focused)
     def hotkey_loop(self):
-        prev = {VK_F6: False, VK_F7: False, VK_F8: False}
+        prev = {}
+        was_capturing = False
         while True:
-            for vk in prev:
+            capturing = self.capturing is not None
+            # While picking a new hotkey, watch every key; otherwise only the bound ones
+            keys = range(1, 256) if capturing else {hk[0] for hk in self.hotkeys.values() if hk}
+            for vk in keys:
                 down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
-                if down and not prev[vk]:
-                    self.events.put(vk)
+                # On the first pass after switching modes, only record which keys are already held
+                if down and not prev.get(vk) and capturing == was_capturing:
+                    if capturing:
+                        if vk == VK_ESCAPE:
+                            self.events.put(("cancel",))
+                        elif vk not in NOT_BINDABLE:
+                            self.events.put(("bind", (vk, held_modifiers())))
+                    else:
+                        hk = (vk, held_modifiers())
+                        for action, bound in self.hotkeys.items():
+                            if bound == hk:
+                                self.events.put(("action", action))
                 prev[vk] = down
+            was_capturing = capturing
             time.sleep(0.02)
+
+    def run_hotkey(self, action):
+        if self.capturing:
+            return
+        hk = self.hotkeys.get(action)
+        if hk and types_text(hk):
+            try:
+                typing = isinstance(self.root.focus_get(), (ttk.Entry, tk.Entry))
+            except (KeyError, tk.TclError):
+                typing = False
+            if typing:
+                return  # the user is typing that key into one of our fields
+        if action == "toggle":
+            self.toggle()
+        elif action == "add":
+            self.add_point_at_cursor()
+        elif action == "remove":
+            if self.points and not self.clicker:
+                self.points.pop()
+                self.refresh_points()
+
+    def start_capture(self, action):
+        was = self.capturing
+        self.stop_capture()
+        if was == action:
+            return  # clicking the same button again cancels
+        self.capturing = action
+        self.hotkey_btns[action].config(text="Press a key…", style="Accent.TButton")
+        self.hotkey_msg.config(text="")
+
+    def stop_capture(self):
+        self.capturing = None
+        self.update_key_texts()
+
+    def set_hotkey(self, action, hk):
+        hotkeys = dict(self.hotkeys)
+        msg = ""
+        if hk:
+            for other, label in HOTKEY_ACTIONS:
+                if other != action and hotkeys[other] == hk:
+                    hotkeys[other] = None
+                    msg = f"{hotkey_name(hk)} was the hotkey for “{label}”, which now has none."
+        hotkeys[action] = hk
+        self.hotkeys = hotkeys             # swapped in one go; the hotkey thread reads it
+        save_hotkeys(hotkeys)
+        self.stop_capture()
+        self.hotkey_msg.config(text=msg)
+
+    def reset_hotkeys(self):
+        self.hotkeys = dict(DEFAULT_HOTKEYS)
+        save_hotkeys(self.hotkeys)
+        self.stop_capture()
+        self.hotkey_msg.config(text="")
+
+    def add_hint(self):
+        hk = self.hotkeys.get("add")
+        return f"press {hotkey_name(hk)}" if hk else "use “Add point”"
+
+    def update_key_texts(self):
+        for action, lbl in self.key_lbls.items():
+            lbl.config(text=hotkey_name(self.hotkeys[action]))
+        for action, btn in self.hotkey_btns.items():
+            if action != self.capturing:
+                btn.config(text=hotkey_name(self.hotkeys[action]), style="TButton")
+        if self.hotkeys.get("add"):
+            empty = (f"No click points yet\n\nHover over the spot you want clicked and {self.add_hint()},\n"
+                     "or use “Add point” for a 3 second countdown.")
+        else:
+            empty = ("No click points yet\n\nUse “Add point” for a 3 second countdown,\n"
+                     "or set a hotkey for adding points on the Hotkeys tab.")
+        self.empty_lbl.config(text=empty)
+        self.tabs_note.config(text="1. Launch it and log in to your sites once (it's a separate profile).\n"
+                                   "2. Open each page in its own tab.\n"
+                                   f"3. Hover the spot in each tab and {self.add_hint()}.")
 
     def ui_loop(self):
         while not self.events.empty():
-            vk = self.events.get()
-            if vk == VK_F6:
-                self.toggle()
-            elif vk == VK_F7:
-                self.add_point_at_cursor()
-            elif vk == VK_F8:
-                if self.points and not self.clicker:
-                    self.points.pop()
-                    self.refresh_points()
+            ev = self.events.get()
+            if ev[0] == "bind":
+                if self.capturing:
+                    self.set_hotkey(self.capturing, ev[1])
+            elif ev[0] == "cancel":
+                if self.capturing:
+                    self.stop_capture()
+            else:
+                self.run_hotkey(ev[1])
         if self.browser.up:
             n = self.browser.tab_count
             self.cdp_lbl.config(text=f"● Connected · {n} tab{'s' if n != 1 else ''}", style="Good.TLabel")
@@ -1344,7 +1545,7 @@ class App:
                     if same_window:
                         point = TabPoint(self.browser, tid, x, y, title, url)
                 elif self.browser.pid and window_pid(root_hwnd) == self.browser.pid:
-                    self.flash("Move the mouse a little over the page, then press F7 again.")
+                    self.flash("Move the mouse a little over the page, then add the point again.")
                     return
         if point is None:
             point = WindowPoint(sx, sy)
@@ -1361,7 +1562,7 @@ class App:
                 messagebox.showinfo("Auto Clicker", "Select one or more points in the list first.")
             return
         if self.clicker:
-            messagebox.showinfo("Auto Clicker", "Stop the clicker (F6) before editing points.")
+            messagebox.showinfo("Auto Clicker", "Stop the clicker before editing points.")
             return
         pts = [self.points[i] for i in idxs]
         multi = len(pts) > 1
@@ -1570,7 +1771,7 @@ class App:
             "Auto Clicker",
             f"An automation {name} window is opening. It's a separate profile, so your normal {name} "
             "stays as it is, and you'll need to log in to your sites once in this one.\n\n"
-            "Open your pages as tabs in that window, hover the spot to click in each tab and press F7.")
+            f"Open your pages as tabs in that window, hover the spot to click in each tab and {self.add_hint()}.")
 
     def launch_browser(self):
         name = self.browser_name.get()
@@ -1600,7 +1801,9 @@ class App:
             self.clicker.stop()
             return
         if not self.points:
-            messagebox.showwarning("Auto Clicker", "Add at least one click point first (Add or F7).")
+            hk = self.hotkeys.get("add")
+            how = f"“Add point” or {hotkey_name(hk)}" if hk else "“Add point”"
+            messagebox.showwarning("Auto Clicker", f"Add at least one click point first ({how}).")
             return
         try:
             cfg = {
