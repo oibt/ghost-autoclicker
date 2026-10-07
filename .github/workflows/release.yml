@@ -1,0 +1,56 @@
+name: Release
+
+# Push a tag like v7.0 (or run it from the Actions tab) to build the .exe
+# and publish a release with GhostAutoClicker.exe and autoclicker.py.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v7.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Smoke test (open the app on Windows, then close it)
+        run: >
+          python -c "import tkinter, autoclicker;
+          root = tkinter.Tk(); app = autoclicker.App(root);
+          root.after(3000, root.destroy); root.mainloop(); print('UI started OK')"
+
+      - name: Build exe
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pyinstaller --onefile --noconsole --name GhostAutoClicker autoclicker.py
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > notes.md <<NOTES
+          **GhostAutoClicker.exe**: Windows app, nothing to install. Just download and run it.
+          Windows may show a SmartScreen warning because the exe isn't signed: click "More info" → "Run anyway".
+
+          **autoclicker.py**: the same app as a script. Run it with \`python autoclicker.py\` (Python 3.8+, no extra packages).
+          NOTES
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/GhostAutoClicker.exe autoclicker.py --clobber
+          else
+            gh release create "$TAG" dist/GhostAutoClicker.exe autoclicker.py \
+              --title "Ghost Auto Clicker $TAG" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
