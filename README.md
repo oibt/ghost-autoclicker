@@ -15,6 +15,8 @@ Optional standalone exe:
 pyinstaller --onefile --noconsole autoclicker.py
 ```
 
+![Ghost Auto Clicker, light theme](docs/screenshot-light.png)
+
 ## Features
 
 - A list of click points, clicked in order (one after another) or all at the same time.
@@ -30,6 +32,15 @@ pyinstaller --onefile --noconsole autoclicker.py
   | F7  | Add a point under the mouse |
   | F8  | Remove the last point |
 
+## Interface
+
+- **Click points** (left): the list of points with their type, position, reload setting and a live click count for each point. While clicking in order, the point being clicked is highlighted.
+- **Settings** (right), in four tabs: **Speed** (clicks per second, button, hold time, random offset, click order), **Limits** (breaks and auto-stop), **Browser tabs** (the automation browser) and **Windows** (background/foreground mode and advanced options).
+- **Footer**: the Start/Stop button, the total click count, the current status and the last error.
+- **Light and dark themes.** It follows the Windows app theme on start (including a dark title bar), and the button at the top right switches it.
+
+![Ghost Auto Clicker, dark theme while clicking](docs/screenshot-dark.png)
+
 ## Two kinds of points
 
 ### Window points (`WindowPoint`): any app
@@ -37,7 +48,7 @@ pyinstaller --onefile --noconsole autoclicker.py
 - **Background mode** posts `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP` to the window. For Chromium windows, the "Auto" send-to option posts to the top-level `Chrome_WidgetWin_1` and not to `Chrome_RenderWidgetHostHWND`. Posting to the child registered only the first click on many sites.
 - **Foreground mode** uses `SetCursorPos` + `mouse_event`, which takes over the real mouse.
 - **Reload** sends `WM_APPCOMMAND` browser refresh or a posted F5. "Open URL" posts F6 (focus the omnibox), sends `WM_CHAR` for each character, then Delete (drops autocomplete) and Enter. It waits 0.35 s after F6 so that "/" doesn't go to the page.
-- **"Restart browser with background clicking enabled"** relaunches the browser with flags that stop it pausing hidden or covered windows. This also works across Windows virtual desktops.
+- **"Restart browser with background clicking"** (Windows tab) relaunches the browser with flags that stop it pausing hidden or covered windows. This also works across Windows virtual desktops.
 
 ### Tab points (`TabPoint`): tabs in the automation browser
 

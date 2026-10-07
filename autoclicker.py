@@ -1,6 +1,6 @@
 """
-Auto Clicker (Windows) - v6
----------------------------
+Ghost Auto Clicker (Windows) - v7
+---------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
 Hotkeys (work even when this window isn't focused):
@@ -460,6 +460,7 @@ class WindowPoint:
         self.reload_every = 0
         self.reload_wait = 3.0
         self.reload_url = ""
+        self.clicks = 0
 
     def endpoint(self, method):
         use_main = method == METHOD_MAIN or (method == METHOD_AUTO and self.chromium)
@@ -483,6 +484,7 @@ class TabPoint:
         self.reload_every = 0
         self.reload_wait = 3.0
         self.reload_url = ""
+        self.clicks = 0
 
 
 # ---------------------------------------------------------------- clicker
@@ -584,6 +586,7 @@ class Clicker(threading.Thread):
         self.loading = [False] * n         # tab point: wait for the page to finish loading too
         self.page_locks = {}
         self.page_locks_lock = threading.Lock()
+        self.per_point = [0] * n          # clicks on each point (shown in the list)
         self.reload_pool = ThreadPoolExecutor(max_workers=8)
         winmm.timeBeginPeriod(1)  # 1 ms timer precision for accurate CPS
         try:
@@ -677,7 +680,7 @@ class Clicker(threading.Thread):
         points = c["points"]
         n = len(points)
         interval = 1.0 / c["cps"]
-        per_point = [0] * n
+        per_point = self.per_point
         batch = 0
         idx = 0
         next_t = time.perf_counter()
@@ -734,7 +737,7 @@ class Clicker(threading.Thread):
         points = c["points"]
         n = len(points)
         interval = 1.0 / c["cps"]          # here: clicks per second for EACH point
-        per_point = [0] * n
+        per_point = self.per_point
         rounds = 0
         batch = 0
         # Different pages are clicked at the same time, but each page only has ONE mouse:
@@ -827,9 +830,124 @@ class Clicker(threading.Thread):
         self.stop_evt.set()
 
 
+# ---------------------------------------------------------------- look & feel
+FONT = "Segoe UI"
+THEMES = {
+    "light": dict(bg="#f5f6f8", field="#ffffff", text="#111827", muted="#6b7280", border="#d9dce1",
+                  button="#e9ebef", button_hover="#dde0e6", accent="#4f46e5", accent_hover="#4338ca",
+                  accent_text="#ffffff", select="#e0e7ff", select_text="#111827", stripe="#f8f9fb",
+                  active_row="#dcfce7", good="#16a34a", good_hover="#15803d", bad="#dc2626",
+                  bad_hover="#b91c1c", warn="#b45309"),
+    "dark": dict(bg="#15171c", field="#1f2228", text="#e5e7eb", muted="#9ca3af", border="#30343c",
+                 button="#272b33", button_hover="#323741", accent="#6366f1", accent_hover="#818cf8",
+                 accent_text="#ffffff", select="#312e81", select_text="#ffffff", stripe="#23262d",
+                 active_row="#14532d", good="#16a34a", good_hover="#22c55e", bad="#dc2626",
+                 bad_hover="#ef4444", warn="#f59e0b"),
+}
+
+
+def system_dark():
+    """True when Windows is set to dark mode for apps."""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except Exception:
+        return False
+
+
+def set_title_bar(win, dark):
+    """Dark or light Windows title bar (Windows 10 20H1+ and Windows 11)."""
+    try:
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        on = ctypes.c_int(1 if dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))
+    except Exception:
+        pass
+
+
+def style_widgets(root, c):
+    s = ttk.Style(root)
+    s.theme_use("clam")
+    font = (FONT, 10)
+    root.configure(bg=c["bg"])
+    for opt, val in (("background", c["field"]), ("foreground", c["text"]), ("font", font),
+                     ("selectBackground", c["accent"]), ("selectForeground", c["accent_text"])):
+        root.option_add(f"*TCombobox*Listbox.{opt}", val)
+
+    s.configure(".", background=c["bg"], foreground=c["text"], font=font, bordercolor=c["border"],
+                lightcolor=c["bg"], darkcolor=c["bg"], troughcolor=c["bg"], fieldbackground=c["field"],
+                selectbackground=c["accent"], selectforeground=c["accent_text"], insertcolor=c["text"],
+                arrowcolor=c["muted"], focuscolor=c["bg"])
+    s.configure("Title.TLabel", font=(FONT, 15, "bold"))
+    s.configure("Section.TLabel", font=(FONT, 10, "bold"))
+    s.configure("Muted.TLabel", foreground=c["muted"])
+    s.configure("Warn.TLabel", foreground=c["warn"])
+    s.configure("Good.TLabel", foreground=c["good"])
+    s.configure("Count.TLabel", font=(FONT, 20, "bold"))
+    s.configure("Key.TLabel", background=c["button"], foreground=c["text"], font=(FONT, 8, "bold"),
+                padding=(6, 1))
+    s.configure("Empty.TLabel", background=c["field"], foreground=c["muted"])
+
+    def button(name, bg, hover, fg, **extra):
+        s.configure(name, background=bg, foreground=fg, bordercolor=bg, lightcolor=bg, darkcolor=bg,
+                    padding=(12, 5), relief="flat", **extra)
+        s.map(name, background=[("disabled", c["button"]), ("pressed", hover), ("active", hover)],
+              lightcolor=[("pressed", hover), ("active", hover)],
+              darkcolor=[("pressed", hover), ("active", hover)],
+              bordercolor=[("focus", hover)],
+              foreground=[("disabled", c["muted"])])
+
+    button("TButton", c["button"], c["button_hover"], c["text"])
+    button("Ghost.TButton", c["bg"], c["button"], c["muted"])
+    button("Accent.TButton", c["accent"], c["accent_hover"], c["accent_text"])
+    big = dict(font=(FONT, 11, "bold"))
+    button("Start.TButton", c["good"], c["good_hover"], "#ffffff", **big)
+    button("Stop.TButton", c["bad"], c["bad_hover"], "#ffffff", **big)
+    for name in ("Start.TButton", "Stop.TButton"):
+        s.configure(name, padding=(18, 9))
+
+    for name in ("TEntry", "TSpinbox", "TCombobox"):
+        s.configure(name, fieldbackground=c["field"], foreground=c["text"], bordercolor=c["border"],
+                    lightcolor=c["field"], darkcolor=c["field"], background=c["button"],
+                    arrowcolor=c["muted"], padding=(6, 3))
+        s.map(name, bordercolor=[("focus", c["accent"])], fieldbackground=[("readonly", c["field"])],
+              foreground=[("readonly", c["text"])], background=[("active", c["button_hover"])])
+    s.map("TCombobox", selectbackground=[("readonly", c["field"])], selectforeground=[("readonly", c["text"])],
+          bordercolor=[("focus", c["accent"])], fieldbackground=[("readonly", c["field"])],
+          foreground=[("readonly", c["text"])], background=[("active", c["button_hover"])])
+
+    for name in ("TRadiobutton", "TCheckbutton"):
+        s.configure(name, background=c["bg"], indicatorbackground=c["field"], indicatorforeground=c["accent"],
+                    upperbordercolor=c["border"], lowerbordercolor=c["border"], indicatormargin=(0, 0, 6, 0))
+        s.map(name, background=[("active", c["bg"])],
+              indicatorbackground=[("pressed", c["field"]), ("selected", c["field"])])
+
+    s.configure("TNotebook", background=c["bg"], bordercolor=c["border"], lightcolor=c["bg"],
+                darkcolor=c["bg"], tabmargins=(0, 0, 0, 0))
+    s.configure("TNotebook.Tab", background=c["button"], foreground=c["muted"], padding=(14, 6),
+                bordercolor=c["border"], lightcolor=c["button"], darkcolor=c["button"])
+    s.map("TNotebook.Tab", background=[("selected", c["bg"])], foreground=[("selected", c["text"])],
+          lightcolor=[("selected", c["bg"])], expand=[("selected", (0, 0, 0, 0))])
+
+    s.configure("Treeview", background=c["field"], fieldbackground=c["field"], foreground=c["text"],
+                rowheight=30, bordercolor=c["border"], lightcolor=c["field"], darkcolor=c["field"])
+    s.map("Treeview", background=[("selected", c["select"])], foreground=[("selected", c["select_text"])])
+    s.configure("Treeview.Heading", background=c["button"], foreground=c["muted"], font=(FONT, 9, "bold"),
+                padding=(6, 5), relief="flat", bordercolor=c["border"], lightcolor=c["button"],
+                darkcolor=c["button"])
+    s.map("Treeview.Heading", background=[("active", c["button_hover"])])
+    s.configure("Vertical.TScrollbar", background=c["button"], troughcolor=c["field"], bordercolor=c["field"],
+                lightcolor=c["button"], darkcolor=c["button"], arrowcolor=c["muted"], gripcount=0)
+    s.map("Vertical.TScrollbar", background=[("active", c["button_hover"])])
+
+
 # ---------------------------------------------------------------- UI
-HINT = "F7 add · F8 remove last · double-click to edit · Ctrl/Shift+click to edit several"
+HINT = "Double-click a point to edit it · Ctrl/Shift+click to edit several together"
 KEEP = "(keep each point's own)"
+START_TEXT, STOP_TEXT = "▶  Start", "■  Stop"
 
 
 class App:
@@ -840,151 +958,270 @@ class App:
         self.events = queue.Queue()
         self.countdown = 0
         self.browser = Browser()
+        self.dark = system_dark()
+        self.flash_job = None
+        self.active_row = None
 
-        root.title("Auto Clicker")
-        root.resizable(False, False)
-        pad = {"padx": 8, "pady": 4}
+        root.title("Ghost Auto Clicker")
+        root.minsize(940, 560)
+        self.apply_theme()
 
-        # Click points
-        f = ttk.LabelFrame(root, text="Click points (clicked in order, then repeats)")
-        f.pack(fill="x", **pad)
-        self.tree = ttk.Treeview(f, columns=("n", "x", "y", "reload", "win"), show="headings", height=6,
-                                 selectmode="extended")
-        for col, text, w in (("n", "#", 30), ("x", "X", 55), ("y", "Y", 55),
-                             ("reload", "Reload page", 120), ("win", "Window / tab", 230)):
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, anchor="w" if col == "win" else "center", stretch=False)
-        self.tree.pack(fill="x", padx=6, pady=(4, 2))
-        self.tree.bind("<Double-1>", self.edit_point)
-        self.tree.bind("<Delete>", lambda e: self.remove_selected())
-        self.tree.bind("<Control-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
-
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=(2, 2))
-        self.pick_btn = ttk.Button(row, text="Add (3 s countdown)", command=self.start_pick)
-        self.pick_btn.pack(side="left")
-        ttk.Button(row, text="Edit…", command=self.edit_point).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="Remove", command=self.remove_selected).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="▲", width=3, command=lambda: self.move(-1)).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="▼", width=3, command=lambda: self.move(1)).pack(side="left", padx=(2, 0))
-        ttk.Button(row, text="Select all", command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="Clear all", command=self.clear_points).pack(side="left", padx=(6, 0))
-        self.pick_lbl = ttk.Label(f, text=HINT, foreground="gray")
-        self.pick_lbl.pack(anchor="w", padx=6, pady=(0, 6))
-
-        # Speed
-        f = ttk.LabelFrame(root, text="Speed")
-        f.pack(fill="x", **pad)
-        ttk.Label(f, text="Clicks per second:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.cps = tk.StringVar(value="10")
-        ttk.Spinbox(f, from_=0.1, to=1000, increment=1, textvariable=self.cps, width=8).grid(row=0, column=1, sticky="w")
-        ttk.Label(f, text="Button:").grid(row=0, column=2, sticky="w", padx=(16, 4))
-        self.button = tk.StringVar(value="Left")
-        ttk.Combobox(f, textvariable=self.button, values=["Left", "Right"], state="readonly",
-                     width=7).grid(row=0, column=3, sticky="w", padx=(0, 6))
-        ttk.Label(f, text="Hold (ms):").grid(row=1, column=0, sticky="w", padx=6, pady=(0, 4))
-        self.hold = tk.StringVar(value="20")
-        ttk.Spinbox(f, from_=0, to=1000, textvariable=self.hold, width=8).grid(row=1, column=1, sticky="w", pady=(0, 4))
-        ttk.Label(f, text="Random offset (± px):").grid(row=1, column=2, sticky="w", padx=(16, 4), pady=(0, 4))
-        self.jitter = tk.StringVar(value="0")
-        ttk.Spinbox(f, from_=0, to=50, textvariable=self.jitter, width=5).grid(row=1, column=3, sticky="w", pady=(0, 4))
-        ttk.Label(f, text="Click order:").grid(row=2, column=0, sticky="w", padx=6, pady=(0, 2))
-        self.together = tk.BooleanVar(value=False)
-        order = ttk.Frame(f)
-        order.grid(row=2, column=1, columnspan=3, sticky="w", pady=(0, 2))
-        ttk.Radiobutton(order, text="One after another", variable=self.together, value=False,
-                        command=self.update_speed_hint).pack(side="left")
-        ttk.Radiobutton(order, text="All at the same time", variable=self.together, value=True,
-                        command=self.update_speed_hint).pack(side="left", padx=(10, 0))
-        self.speed_hint = ttk.Label(f, foreground="gray")
-        self.speed_hint.grid(row=3, column=0, columnspan=4, sticky="w", padx=6, pady=(0, 4))
-        self.update_speed_hint()
-
-        # Pause
-        f = ttk.LabelFrame(root, text="Delay after a set amount of clicks")
-        f.pack(fill="x", **pad)
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=4)
-        ttk.Label(row, text="After every").pack(side="left")
-        self.every = tk.StringVar(value="0")
-        ttk.Spinbox(row, from_=0, to=1_000_000, textvariable=self.every, width=8).pack(side="left", padx=4)
-        ttk.Label(row, text="clicks, wait").pack(side="left")
-        self.pause = tk.StringVar(value="5")
-        ttk.Spinbox(row, from_=0, to=86400, increment=0.5, textvariable=self.pause, width=6).pack(side="left", padx=4)
-        ttk.Label(row, text="seconds   (0 = never)").pack(side="left")
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=(0, 6))
-        ttk.Label(row, text="Stop completely after").pack(side="left")
-        self.limit = tk.StringVar(value="0")
-        ttk.Spinbox(row, from_=0, to=10_000_000, textvariable=self.limit, width=10).pack(side="left", padx=4)
-        ttk.Label(row, text="clicks   (0 = run forever)").pack(side="left")
-
-        # Browser tabs
-        f = ttk.LabelFrame(root, text="Browser tabs — click every tab in ONE browser, even hidden tabs")
-        f.pack(fill="x", **pad)
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=(4, 2))
-        self.browser_name = tk.StringVar(value="Brave")
-        ttk.Combobox(row, textvariable=self.browser_name, values=list(BROWSERS), state="readonly",
-                     width=8).pack(side="left")
-        ttk.Button(row, text="Launch automation browser", command=self.launch_automation).pack(side="left", padx=6)
-        self.cdp_lbl = ttk.Label(row, text="", foreground="gray")
-        self.cdp_lbl.pack(side="left", padx=4)
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=(2, 2))
-        ttk.Label(row, text="Tab click method:").pack(side="left")
-        self.tab_method = tk.StringVar(value=TAB_REAL)
-        ttk.Combobox(row, textvariable=self.tab_method, values=[TAB_REAL, TAB_JS], state="readonly",
-                     width=28).pack(side="left", padx=4)
-        ttk.Label(f, text="Open your pages as tabs in the automation browser, hover a spot in a tab and press F7.\n"
-                          "Its tabs can then stay hidden, and the window can sit on another desktop.",
-                  foreground="gray").pack(anchor="w", padx=6, pady=(0, 6))
-
-        # Windows
-        f = ttk.LabelFrame(root, text="Window points (any app / other browsers)")
-        f.pack(fill="x", **pad)
-        self.background = tk.BooleanVar(value=True)
-        ttk.Radiobutton(f, text="Background — window can be behind others, mouse stays free",
-                        variable=self.background, value=True).pack(anchor="w", padx=6, pady=(4, 0))
-        ttk.Radiobutton(f, text="Foreground — moves your real mouse (works with everything)",
-                        variable=self.background, value=False).pack(anchor="w", padx=6, pady=(0, 4))
-        adv = ttk.Frame(f)
-        adv.pack(fill="x", padx=6, pady=(0, 4))
-        ttk.Label(adv, text="Send clicks to:").grid(row=0, column=0, sticky="w")
-        self.method = tk.StringVar(value=METHOD_AUTO)
-        ttk.Combobox(adv, textvariable=self.method, values=[METHOD_AUTO, METHOD_MAIN, METHOD_CHILD],
-                     state="readonly", width=22).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(adv, text="Reload using:").grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self.reload_method = tk.StringVar(value=RELOAD_CMD)
-        ttk.Combobox(adv, textvariable=self.reload_method, values=[RELOAD_CMD, RELOAD_F5],
-                     state="readonly", width=22).grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
-        row = ttk.Frame(f)
-        row.pack(fill="x", padx=6, pady=(2, 6))
-        ttk.Button(row, text="Restart browser with background clicking enabled",
-                   command=self.launch_browser).pack(side="left")
-        ttk.Label(row, text="(uses the browser picked above)", foreground="gray").pack(side="left", padx=6)
-
-        # Start / status
-        f = ttk.Frame(root)
-        f.pack(fill="x", padx=8, pady=(4, 10))
-        self.start_btn = ttk.Button(f, text="Start (F6)", command=self.toggle, width=16)
-        self.start_btn.pack(side="left")
+        # Header
+        head = ttk.Frame(root, padding=(16, 12, 16, 4))
+        head.pack(fill="x")
+        ttk.Label(head, text="Ghost Auto Clicker", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text="Clicks windows and hidden browser tabs in the background",
+                  style="Muted.TLabel").pack(side="left", padx=(12, 0), pady=(6, 0))
         self.topmost = tk.BooleanVar(value=False)
-        ttk.Checkbutton(f, text="On top", variable=self.topmost,
+        ttk.Checkbutton(head, text="Keep on top", variable=self.topmost,
                         command=lambda: root.attributes("-topmost", self.topmost.get())).pack(side="right")
-        self.status_lbl = ttk.Label(f, text="Idle", width=60)
-        self.status_lbl.pack(side="left", padx=10)
+        self.theme_btn = ttk.Button(head, style="Ghost.TButton", command=self.toggle_theme)
+        self.theme_btn.pack(side="right", padx=(0, 12))
+        self.update_theme_button()
 
+        # Footer (packed before the body so it stays visible when the window is small)
+        foot = ttk.Frame(root, padding=(16, 12, 16, 14))
+        foot.pack(side="bottom", fill="x")
+        self.line = tk.Frame(root, height=1, bg=self.colors["border"])
+        self.line.pack(side="bottom", fill="x")
+        self.start_btn = ttk.Button(foot, text=START_TEXT, style="Start.TButton", command=self.toggle, width=10)
+        self.start_btn.pack(side="left")
+        self.count_lbl = ttk.Label(foot, text="0", style="Count.TLabel")
+        self.count_lbl.pack(side="left", padx=(20, 4))
+        ttk.Label(foot, text="clicks", style="Muted.TLabel").pack(side="left", pady=(8, 0))
+        info = ttk.Frame(foot)
+        info.pack(side="left", fill="x", expand=True, padx=(20, 0))
+        self.status_lbl = ttk.Label(info, text="Idle")
+        self.status_lbl.pack(anchor="w")
+        self.err_lbl = ttk.Label(info, text="", style="Warn.TLabel")
+        self.err_lbl.pack(anchor="w")
+        keys = ttk.Frame(foot)
+        keys.pack(side="right")
+        for key, text in (("F6", "start / stop"), ("F7", "add point"), ("F8", "remove last")):
+            ttk.Label(keys, text=key, style="Key.TLabel").pack(side="left", padx=(12, 4))
+            ttk.Label(keys, text=text, style="Muted.TLabel").pack(side="left")
+
+        # Body: point list on the left, settings on the right
+        body = ttk.Frame(root, padding=(16, 8, 16, 12))
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="ns")
+        self.build_points(left)
+        self.build_settings(right)
+
+        self.refresh_points()
         threading.Thread(target=self.hotkey_loop, daemon=True).start()
         self.ui_loop()
 
+    # --- layout
+    def build_points(self, parent):
+        top = ttk.Frame(parent)
+        top.pack(fill="x", pady=(0, 6))
+        ttk.Label(top, text="Click points", style="Section.TLabel").pack(side="left")
+        self.summary_lbl = ttk.Label(top, style="Muted.TLabel")
+        self.summary_lbl.pack(side="left", padx=(10, 0))
+        ttk.Button(top, text="Clear all", style="Ghost.TButton", command=self.clear_points).pack(side="right")
+        ttk.Button(top, text="Select all", style="Ghost.TButton",
+                   command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side="right")
+
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(frame, columns=("n", "kind", "pos", "reload", "clicks", "win"),
+                                 show="headings", height=10, selectmode="extended")
+        for col, text, w, anchor in (("n", "#", 40, "center"), ("kind", "Type", 72, "w"),
+                                     ("pos", "Position", 96, "center"), ("reload", "Reload", 150, "w"),
+                                     ("clicks", "Clicks", 72, "center"), ("win", "Window / tab", 220, "w")):
+            self.tree.heading(col, text=text, anchor=anchor)
+            self.tree.column(col, width=w, minwidth=w, anchor=anchor, stretch=col == "win")
+        sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", self.edit_point)
+        self.tree.bind("<Delete>", lambda e: self.remove_selected())
+        self.tree.bind("<Control-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
+        self.empty_lbl = ttk.Label(self.tree, style="Empty.TLabel", justify="center",
+                                   text="No click points yet\n\nHover over the spot you want clicked and press F7,\n"
+                                        "or use “Add point” for a 3 second countdown.")
+        self.style_tree()
+
+        bar = ttk.Frame(parent)
+        bar.pack(fill="x", pady=(8, 0))
+        self.pick_btn = ttk.Button(bar, text="+  Add point", style="Accent.TButton", command=self.start_pick)
+        self.pick_btn.pack(side="left")
+        ttk.Button(bar, text="Edit…", command=self.edit_point).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="Remove", command=self.remove_selected).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="▲", width=3, command=lambda: self.move(-1)).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="▼", width=3, command=lambda: self.move(1)).pack(side="left", padx=(2, 0))
+        self.pick_lbl = ttk.Label(parent, text=HINT, style="Muted.TLabel")
+        self.pick_lbl.pack(anchor="w", pady=(6, 0))
+
+    @staticmethod
+    def page(nb, title):
+        p = ttk.Frame(nb, padding=(14, 12))
+        p.columnconfigure(2, weight=1)
+        nb.add(p, text=title)
+        return p
+
+    @staticmethod
+    def field(parent, r, label, widget, unit=None, pady=4):
+        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", padx=(0, 12), pady=pady)
+        widget.grid(row=r, column=1, sticky="w", pady=pady)
+        if unit:
+            ttk.Label(parent, text=unit, style="Muted.TLabel").grid(row=r, column=2, sticky="w", padx=(6, 0))
+
+    @staticmethod
+    def section(parent, r, text, first=False):
+        ttk.Label(parent, text=text, style="Section.TLabel").grid(row=r, column=0, columnspan=3, sticky="w",
+                                                                  pady=(0 if first else 14, 4))
+
+    @staticmethod
+    def note(parent, r, text, wrap=330):
+        lbl = ttk.Label(parent, text=text, style="Muted.TLabel", wraplength=wrap, justify="left")
+        lbl.grid(row=r, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        return lbl
+
+    def build_settings(self, parent):
+        nb = ttk.Notebook(parent)
+        nb.pack(fill="both", expand=True)
+
+        # Speed
+        p = self.page(nb, "Speed")
+        self.section(p, 0, "Clicking", first=True)
+        self.cps = tk.StringVar(value="10")
+        self.field(p, 1, "Clicks per second", ttk.Spinbox(p, from_=0.1, to=1000, increment=1,
+                                                          textvariable=self.cps, width=8))
+        self.button = tk.StringVar(value="Left")
+        self.field(p, 2, "Mouse button", ttk.Combobox(p, textvariable=self.button, values=["Left", "Right"],
+                                                      state="readonly", width=7))
+        self.hold = tk.StringVar(value="20")
+        self.field(p, 3, "Hold each click", ttk.Spinbox(p, from_=0, to=1000, textvariable=self.hold, width=8), "ms")
+        self.jitter = tk.StringVar(value="0")
+        self.field(p, 4, "Random offset", ttk.Spinbox(p, from_=0, to=50, textvariable=self.jitter, width=8), "± px")
+        self.section(p, 5, "Click order")
+        self.together = tk.BooleanVar(value=False)
+        ttk.Radiobutton(p, text="One after another", variable=self.together, value=False,
+                        command=self.update_speed_hint).grid(row=6, column=0, columnspan=3, sticky="w", pady=2)
+        ttk.Radiobutton(p, text="All at the same time", variable=self.together, value=True,
+                        command=self.update_speed_hint).grid(row=7, column=0, columnspan=3, sticky="w", pady=2)
+        self.speed_hint = self.note(p, 8, "")
+
+        # Breaks & limits
+        p = self.page(nb, "Limits")
+        self.section(p, 0, "Take a break", first=True)
+        self.every = tk.StringVar(value="0")
+        self.field(p, 1, "After every", ttk.Spinbox(p, from_=0, to=1_000_000, textvariable=self.every, width=10),
+                   "clicks")
+        self.pause = tk.StringVar(value="5")
+        self.field(p, 2, "Wait for", ttk.Spinbox(p, from_=0, to=86400, increment=0.5, textvariable=self.pause,
+                                                 width=10), "seconds")
+        self.note(p, 3, "0 clicks = never take a break.")
+        self.section(p, 4, "Stop automatically")
+        self.limit = tk.StringVar(value="0")
+        self.field(p, 5, "Stop after", ttk.Spinbox(p, from_=0, to=10_000_000, textvariable=self.limit, width=10),
+                   "clicks")
+        self.note(p, 6, "0 = keep going until you press Stop.\n\n"
+                        "In “All at the same time” mode, both of these count rounds (one click on every point).")
+
+        # Browser tabs
+        p = self.page(nb, "Browser tabs")
+        self.note(p, 0, "Launch a separate browser that this app controls. Every tab in it can be clicked, "
+                        "even tabs that aren't showing, and the window can sit on another desktop.")
+        self.section(p, 1, "Automation browser")
+        self.browser_name = tk.StringVar(value="Brave")
+        self.field(p, 2, "Browser", ttk.Combobox(p, textvariable=self.browser_name, values=list(BROWSERS),
+                                                 state="readonly", width=10))
+        self.cdp_lbl = ttk.Label(p, style="Muted.TLabel")
+        self.field(p, 3, "Status", self.cdp_lbl)
+        ttk.Button(p, text="Launch automation browser", style="Accent.TButton",
+                   command=self.launch_automation).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        self.section(p, 5, "Clicking tabs")
+        self.tab_method = tk.StringVar(value=TAB_REAL)
+        self.field(p, 6, "Method", ttk.Combobox(p, textvariable=self.tab_method, values=[TAB_REAL, TAB_JS],
+                                                state="readonly", width=28))
+        self.note(p, 7, "1. Launch it and log in to your sites once (it's a separate profile).\n"
+                        "2. Open each page in its own tab.\n"
+                        "3. Hover the spot in each tab and press F7.")
+
+        # Window points
+        p = self.page(nb, "Windows")
+        self.section(p, 0, "Window points (any app or browser)", first=True)
+        self.background = tk.BooleanVar(value=True)
+        ttk.Radiobutton(p, text="Background", variable=self.background,
+                        value=True).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Label(p, text="Window can be behind others, your mouse stays free",
+                  style="Muted.TLabel").grid(row=2, column=0, columnspan=3, sticky="w", padx=(24, 0))
+        ttk.Radiobutton(p, text="Foreground", variable=self.background,
+                        value=False).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(p, text="Moves your real mouse, works with everything",
+                  style="Muted.TLabel").grid(row=4, column=0, columnspan=3, sticky="w", padx=(24, 0))
+        self.section(p, 5, "Advanced")
+        self.method = tk.StringVar(value=METHOD_AUTO)
+        self.field(p, 6, "Send clicks to", ttk.Combobox(p, textvariable=self.method,
+                                                        values=[METHOD_AUTO, METHOD_MAIN, METHOD_CHILD],
+                                                        state="readonly", width=22))
+        self.reload_method = tk.StringVar(value=RELOAD_CMD)
+        self.field(p, 7, "Reload using", ttk.Combobox(p, textvariable=self.reload_method,
+                                                      values=[RELOAD_CMD, RELOAD_F5], state="readonly", width=22))
+        ttk.Button(p, text="Restart browser with background clicking",
+                   command=self.launch_browser).grid(row=8, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.note(p, 9, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
+                        "the Browser tabs page.")
+
+        self.update_speed_hint()
+
+    # --- theme
+    def apply_theme(self):
+        self.colors = THEMES["dark" if self.dark else "light"]
+        style_widgets(self.root, self.colors)
+        set_title_bar(self.root, self.dark)
+        for w in self.root.winfo_children():
+            if isinstance(w, tk.Toplevel):
+                w.configure(bg=self.colors["bg"])
+                set_title_bar(w, self.dark)
+        if hasattr(self, "tree"):
+            self.style_tree()
+            self.line.configure(bg=self.colors["border"])
+
+    def toggle_theme(self):
+        self.dark = not self.dark
+        self.apply_theme()
+        self.update_theme_button()
+
+    def update_theme_button(self):
+        self.theme_btn.config(text="☀  Light mode" if self.dark else "☾  Dark mode")
+
+    def style_tree(self):
+        c = self.colors
+        self.tree.tag_configure("odd", background=c["stripe"])
+        self.tree.tag_configure("active", background=c["active_row"])
+
     def update_speed_hint(self):
         if self.together.get():
-            text = ("Different tabs/windows are clicked together each round; points on the same page go one\n"
-                    "right after another. Speed counts rounds (10 CPS = each point clicked 10 times a second).")
+            text = ("Different tabs and windows are clicked together each round; points on the same page go "
+                    "one right after another. Speed counts rounds: 10 per second = each point clicked 10 "
+                    "times a second.")
         else:
-            text = "Speed is the total for all points: 10 CPS with 2 points = 5 clicks each per second."
+            text = "Speed is the total for all points: 10 per second with 2 points = 5 clicks each per second."
         self.speed_hint.config(text=text)
+        self.update_summary()
+
+    def update_summary(self):
+        n = len(self.points)
+        if not n:
+            text = ""
+        else:
+            order = "all at the same time" if self.together.get() else "one after another"
+            text = f"{n} point{'s' if n != 1 else ''} · clicked {order}"
+        self.summary_lbl.config(text=text)
+
+    def set_running(self, running):
+        self.start_btn.config(text=STOP_TEXT if running else START_TEXT,
+                              style="Stop.TButton" if running else "Start.TButton")
 
     # --- hotkeys (polled so they work while other apps are focused)
     def hotkey_loop(self):
@@ -1009,35 +1246,70 @@ class App:
                     self.points.pop()
                     self.refresh_points()
         if self.browser.up:
-            self.cdp_lbl.config(text=f"● Connected — {self.browser.tab_count} tab(s)", foreground="green")
+            n = self.browser.tab_count
+            self.cdp_lbl.config(text=f"● Connected · {n} tab{'s' if n != 1 else ''}", style="Good.TLabel")
         else:
-            self.cdp_lbl.config(text="Not running", foreground="gray")
-        if self.clicker:
-            n = len(self.clicker.cfg["points"])
-            err = f"   ⚠ {self.clicker.last_error}" if self.clicker.last_error else ""
-            where = (f"all {n} points" if self.clicker.cfg["together"]
-                     else f"point {self.clicker.current + 1}/{n}")
-            self.status_lbl.config(
-                text=f"{self.clicker.status} — {where} — {self.clicker.clicks:,} clicks{err}")
-            if not self.clicker.is_alive():
-                self.status_lbl.config(text=f"{self.clicker.status} — {self.clicker.clicks:,} clicks{err}")
+            self.cdp_lbl.config(text="○ Not running", style="Muted.TLabel")
+        cl = self.clicker
+        if cl:
+            n = len(cl.cfg["points"])
+            where = f"all {n} points" if cl.cfg["together"] else f"point {cl.current + 1} of {n}"
+            self.count_lbl.config(text=f"{cl.clicks:,}")
+            self.status_lbl.config(text=f"{cl.status} · {where}")
+            self.err_lbl.config(text=f"⚠ {cl.last_error}" if cl.last_error else "")
+            self.show_point_clicks(cl)
+            self.mark_active(None if cl.cfg["together"] else cl.current)
+            if not cl.is_alive():
+                self.status_lbl.config(text=cl.status)
                 self.clicker = None
                 self.browser.paused = False
-                self.start_btn.config(text="Start (F6)")
+                self.set_running(False)
+                self.mark_active(None)
         self.root.after(100, self.ui_loop)
+
+    def show_point_clicks(self, cl):
+        counts = getattr(cl, "per_point", None)
+        if not counts:
+            return
+        for i, (t, c) in enumerate(zip(cl.cfg["points"], counts)):
+            if c != t.clicks:
+                t.clicks = c
+                if self.tree.exists(str(i)):
+                    self.tree.set(str(i), "clicks", f"{c:,}")
+
+    def mark_active(self, i):
+        if i == self.active_row:
+            return
+        for row in (self.active_row, i):
+            if row is not None and self.tree.exists(str(row)):
+                self.tree.item(str(row), tags=self.row_tags(row, active=row == i))
+        self.active_row = i
+
+    @staticmethod
+    def row_tags(i, active=False):
+        return ("active",) if active else (("odd",) if i % 2 else ())
 
     # --- points
     def refresh_points(self, select=None):
         self.tree.delete(*self.tree.get_children())
+        self.active_row = None
         for i, t in enumerate(self.points):
-            title = t.title if len(t.title) <= 36 else t.title[:35] + "…"
+            title = t.title if len(t.title) <= 48 else t.title[:47] + "…"
             if t.reload_every:
                 every = "each click" if t.reload_every == 1 else f"every {t.reload_every}"
                 kind = "URL " if t.reload_url else ""
                 reload_txt = f"{kind}{every} · {t.reload_wait:g}s"
             else:
                 reload_txt = "—"
-            self.tree.insert("", "end", iid=str(i), values=(i + 1, t.sx, t.sy, reload_txt, title))
+            clicks = f"{t.clicks:,}" if t.clicks else "—"
+            self.tree.insert("", "end", iid=str(i), tags=self.row_tags(i),
+                             values=(i + 1, "Tab" if t.kind == "tab" else "Window", f"{t.sx}, {t.sy}",
+                                     reload_txt, clicks, title))
+        if self.points:
+            self.empty_lbl.place_forget()
+        else:
+            self.empty_lbl.place(relx=0.5, rely=0.55, anchor="center")
+        self.update_summary()
         if select is None:
             return
         rows = [str(i) for i in ([select] if isinstance(select, int) else select)
@@ -1046,9 +1318,11 @@ class App:
             self.tree.selection_set(rows)
             self.tree.see(rows[0])
 
-    def flash(self, text, color="red"):
-        self.pick_lbl.config(text=text, foreground=color)
-        self.root.after(5000, lambda: self.pick_lbl.config(text=HINT, foreground="gray"))
+    def flash(self, text):
+        self.pick_lbl.config(text=text, style="Warn.TLabel")
+        if self.flash_job:
+            self.root.after_cancel(self.flash_job)
+        self.flash_job = self.root.after(5000, lambda: self.pick_lbl.config(text=HINT, style="Muted.TLabel"))
 
     def add_point_at_cursor(self):
         if self.clicker:
@@ -1111,6 +1385,9 @@ class App:
         win.title(f"Edit {len(pts)} points" if multi else f"Point {idxs[0] + 1} settings")
         win.transient(self.root)
         win.resizable(False, False)
+        win.configure(bg=self.colors["bg"])
+        body = ttk.Frame(win, padding=(6, 4))
+        body.pack(fill="both", expand=True)
 
         if on_v is None:
             reload_state = tk.StringVar(value=KEEP)
@@ -1134,45 +1411,45 @@ class App:
         else:
             t = pts[0]
             head = f"Point {idxs[0] + 1}: ({t.sx}, {t.sy}) in “{t.title[:45]}”"
-        ttk.Label(win, text=head, foreground="gray").grid(row=0, column=0, columnspan=3, sticky="w",
+        ttk.Label(body, text=head, style="Muted.TLabel").grid(row=0, column=0, columnspan=3, sticky="w",
                                                           padx=10, pady=(10, 6))
 
-        ttk.Label(win, text="Reload page after clicking:").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 4))
-        ttk.Combobox(win, textvariable=reload_state, state="readonly", width=24,
+        ttk.Label(body, text="Reload page after clicking:").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 4))
+        ttk.Combobox(body, textvariable=reload_state, state="readonly", width=24,
                      values=["On", "Off"] + ([KEEP] if multi else [])).grid(row=1, column=1, columnspan=2,
                                                                           sticky="w", pady=(0, 4))
-        ttk.Label(win, text="Reload every").grid(row=2, column=0, sticky="w", padx=(30, 4), pady=2)
-        ttk.Spinbox(win, from_=1, to=1_000_000, textvariable=every, width=8).grid(row=2, column=1, sticky="w")
-        ttk.Label(win, text="clicks on each point").grid(row=2, column=2, sticky="w", padx=(4, 10))
-        ttk.Label(win, text="Then wait").grid(row=3, column=0, sticky="w", padx=(30, 4), pady=2)
-        ttk.Spinbox(win, from_=0, to=3600, increment=0.5, textvariable=wait, width=8).grid(row=3, column=1, sticky="w")
-        ttk.Label(win, text="seconds for the page to load").grid(row=3, column=2, sticky="w", padx=(4, 10))
+        ttk.Label(body, text="Reload every").grid(row=2, column=0, sticky="w", padx=(30, 4), pady=2)
+        ttk.Spinbox(body, from_=1, to=1_000_000, textvariable=every, width=8).grid(row=2, column=1, sticky="w")
+        ttk.Label(body, text="clicks on each point").grid(row=2, column=2, sticky="w", padx=(4, 10))
+        ttk.Label(body, text="Then wait").grid(row=3, column=0, sticky="w", padx=(30, 4), pady=2)
+        ttk.Spinbox(body, from_=0, to=3600, increment=0.5, textvariable=wait, width=8).grid(row=3, column=1, sticky="w")
+        ttk.Label(body, text="seconds for the page to load").grid(row=3, column=2, sticky="w", padx=(4, 10))
 
-        ttk.Label(win, text="How:").grid(row=4, column=0, sticky="w", padx=(30, 4), pady=(8, 2))
+        ttk.Label(body, text="How:").grid(row=4, column=0, sticky="w", padx=(30, 4), pady=(8, 2))
         r = 4
-        ttk.Radiobutton(win, text="Refresh the current page", variable=mode,
+        ttk.Radiobutton(body, text="Refresh the current page", variable=mode,
                         value="refresh").grid(row=r, column=1, columnspan=2, sticky="w", pady=(8, 2))
         if has_tabs:
             r += 1
             own_txt = "Open each tab's own address (the page it was on when added)"
             if any(p.kind == "window" for p in pts):
                 own_txt += " — window points keep theirs"
-            ttk.Radiobutton(win, text=own_txt, variable=mode, value="own").grid(row=r, column=1, columnspan=2,
+            ttk.Radiobutton(body, text=own_txt, variable=mode, value="own").grid(row=r, column=1, columnspan=2,
                                                                                  sticky="w")
         r += 1
-        ttk.Radiobutton(win, text="Open this URL:", variable=mode,
+        ttk.Radiobutton(body, text="Open this URL:", variable=mode,
                         value="url").grid(row=r, column=1, columnspan=2, sticky="w")
         if multi:
             r += 1
-            ttk.Radiobutton(win, text=KEEP, variable=mode, value="").grid(row=r, column=1, columnspan=2, sticky="w")
+            ttk.Radiobutton(body, text=KEEP, variable=mode, value="").grid(row=r, column=1, columnspan=2, sticky="w")
         r += 1
-        url_entry = ttk.Entry(win, textvariable=url, width=56)
+        url_entry = ttk.Entry(body, textvariable=url, width=56)
         url_entry.grid(row=r, column=0, columnspan=3, sticky="w", padx=(30, 10), pady=(2, 0))
         url_entry.bind("<FocusIn>", lambda e: mode.set("url"))
         r += 1
-        ttk.Label(win, text="Opening a URL helps if your clicks take you to another page and a refresh\n"
+        ttk.Label(body, text="Opening a URL helps if your clicks take you to another page and a refresh\n"
                             "would land on the wrong one.",
-                  foreground="gray").grid(row=r, column=0, columnspan=3, sticky="w", padx=(30, 10), pady=(2, 0))
+                  style="Muted.TLabel").grid(row=r, column=0, columnspan=3, sticky="w", padx=(30, 10), pady=(2, 0))
 
         def parse(text, conv, minimum, label):
             text = text.strip()
@@ -1221,12 +1498,13 @@ class App:
             self.refresh_points(select=idxs)
             win.destroy()
 
-        btns = ttk.Frame(win)
+        btns = ttk.Frame(body)
         btns.grid(row=r + 1, column=0, columnspan=3, sticky="e", padx=10, pady=(10, 10))
-        ttk.Button(btns, text="Save", command=save).pack(side="left")
+        ttk.Button(btns, text="Save", style="Accent.TButton", command=save).pack(side="left")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=(6, 0))
         win.bind("<Return>", lambda e: save())
         win.bind("<Escape>", lambda e: win.destroy())
+        set_title_bar(win, self.dark)
         win.grab_set()
 
     def remove_selected(self):
@@ -1260,11 +1538,11 @@ class App:
 
     def pick_tick(self):
         if self.countdown > 0:
-            self.pick_lbl.config(text=f"Hover over the target… {self.countdown}", foreground="")
+            self.pick_lbl.config(text=f"Hover over the target… {self.countdown}", style="TLabel")
             self.countdown -= 1
             self.root.after(1000, self.pick_tick)
         else:
-            self.pick_lbl.config(text=HINT, foreground="gray")
+            self.pick_lbl.config(text=HINT, style="Muted.TLabel")
             self.add_point_at_cursor()
             self.pick_btn.config(state="normal")
 
@@ -1372,9 +1650,14 @@ class App:
                 return
             self.fg_warned = True
         self.browser.paused = True
+        for t in self.points:
+            t.clicks = 0
+        self.refresh_points(select=self.selected_indices())
+        self.count_lbl.config(text="0")
+        self.err_lbl.config(text="")
         self.clicker = Clicker(cfg)
         self.clicker.start()
-        self.start_btn.config(text="Stop (F6)")
+        self.set_running(True)
 
 
 if __name__ == "__main__":
