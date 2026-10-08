@@ -1,6 +1,6 @@
 """
-Ghost Auto Clicker (Windows) - v7
----------------------------------
+Ghost Auto Clicker (Windows) - v7.1
+-----------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
 Hotkeys (work even when this window isn't focused; change them on the Hotkeys tab):
@@ -16,6 +16,7 @@ Two kinds of click points:
                   in one single browser window.
 
 Points are clicked in order (1, 2, 3, ... then back to 1).
+With no points in the list, Start clicks wherever your mouse is.
 """
 import base64
 import ctypes
@@ -578,6 +579,24 @@ class TabPoint:
         self.clicks = 0
 
 
+class CursorPoint:
+    """No fixed spot: click wherever the mouse is (used when the point list is empty)."""
+    kind = "cursor"
+
+    def __init__(self, own_hwnd):
+        self.own_hwnd = own_hwnd           # this app's window: never click on it
+        self.title = "Mouse cursor"
+        self.sx = self.sy = 0
+        self.reload_every = 0
+        self.reload_wait = 0.0
+        self.reload_url = ""
+        self.clicks = 0
+
+
+class SkipClick(Exception):
+    """This click was skipped on purpose (not an error)."""
+
+
 # ---------------------------------------------------------------- clicker
 class Clicker(threading.Thread):
     def __init__(self, cfg):
@@ -629,6 +648,25 @@ class Clicker(threading.Thread):
             user32.keybd_event(VK_F5, F5_SCAN, 0, 0)
             user32.keybd_event(VK_F5, F5_SCAN, KEYEVENTF_KEYUP, 0)
 
+    # --- mouse cursor
+    def press_cursor(self, t, dx, dy):
+        x, y = cursor_pos()
+        if t.own_hwnd and root_window_at(x, y) == t.own_hwnd:
+            # Started with the mouse on our Start button: clicking here would stop the clicker
+            raise SkipClick("mouse is over Ghost Auto Clicker")
+        if self.cfg["right"]:
+            d, u = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+        else:
+            d, u = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+        if dx or dy:
+            user32.SetCursorPos(x + dx, y + dy)
+        user32.mouse_event(d, 0, 0, 0, 0)
+        if self.cfg["hold"]:
+            self.stop_evt.wait(self.cfg["hold"])
+        user32.mouse_event(u, 0, 0, 0, 0)
+        if dx or dy:
+            user32.SetCursorPos(x, y)
+
     # --- tab points
     def press_tab(self, t, dx, dy):
         c = self.cfg
@@ -661,6 +699,8 @@ class Clicker(threading.Thread):
         dy = random.randint(-j, j) if j else 0
         if t.kind == "tab":
             self.press_tab(t, dx, dy)
+        elif t.kind == "cursor":
+            self.press_cursor(t, dx, dy)
         else:
             self.press_window(t, dx, dy)
 
@@ -692,6 +732,8 @@ class Clicker(threading.Thread):
     # --- reloads run in the background; the clicker keeps going with the other points
     @staticmethod
     def page_key(t):
+        if t.kind == "cursor":
+            return ("cursor",)
         return ("tab", t.tid) if t.kind == "tab" else ("win", t.root)
 
     def page_lock(self, key):
@@ -792,6 +834,12 @@ class Clicker(threading.Thread):
                 return
             try:
                 self.press(t)
+            except SkipClick as e:
+                self.status = f"Waiting: {e}"
+                if self.stop_evt.wait(0.05):
+                    break
+                next_t = time.perf_counter()
+                continue
             except Exception as e:
                 self.last_error = f"point {chosen + 1}: {e or e.__class__.__name__}"
                 if self.stop_evt.wait(0.5):
@@ -847,6 +895,9 @@ class Clicker(threading.Thread):
             try:
                 self.press(points[i])
                 return True
+            except SkipClick as e:
+                self.status = f"Waiting: {e}"
+                return False
             except Exception as e:
                 self.last_error = f"point {i + 1}: {e or e.__class__.__name__}"
                 return False
@@ -884,7 +935,7 @@ class Clicker(threading.Thread):
                 for i in ok:
                     per_point[i] += 1
                 if not ok:
-                    if self.stop_evt.wait(0.5):
+                    if self.stop_evt.wait(0.05 if self.status.startswith("Waiting") else 0.5):
                         break
                     continue
                 rounds += 1
@@ -1325,7 +1376,7 @@ class App:
     def update_summary(self):
         n = len(self.points)
         if not n:
-            text = ""
+            text = "No points · Start clicks wherever your mouse is"
         else:
             order = "all at the same time" if self.together.get() else "one after another"
             text = f"{n} point{'s' if n != 1 else ''} · clicked {order}"
@@ -1424,12 +1475,14 @@ class App:
         for action, btn in self.hotkey_btns.items():
             if action != self.capturing:
                 btn.config(text=hotkey_name(self.hotkeys[action]), style="TButton")
+        start = self.hotkeys.get("toggle")
+        start = f"Press {hotkey_name(start)} or Start" if start else "Press Start"
         if self.hotkeys.get("add"):
-            empty = (f"No click points yet\n\nHover over the spot you want clicked and {self.add_hint()},\n"
-                     "or use “Add point” for a 3 second countdown.")
+            add = f"hover over each spot and {self.add_hint()},\nor use “Add point” for a 3 second countdown."
         else:
-            empty = ("No click points yet\n\nUse “Add point” for a 3 second countdown,\n"
-                     "or set a hotkey for adding points on the Hotkeys tab.")
+            add = "use “Add point” (3 second countdown)."
+        empty = (f"No click points: {start} to click wherever your mouse is.\n\n"
+                 f"To click fixed spots instead, {add}")
         self.empty_lbl.config(text=empty)
         self.tabs_note.config(text="1. Launch it and log in to your sites once (it's a separate profile).\n"
                                    "2. Open each page in its own tab.\n"
@@ -1454,7 +1507,12 @@ class App:
         cl = self.clicker
         if cl:
             n = len(cl.cfg["points"])
-            where = f"all {n} points" if cl.cfg["together"] else f"point {cl.current + 1} of {n}"
+            if cl.cfg["points"][0].kind == "cursor":
+                where = "at the mouse cursor"
+            elif cl.cfg["together"]:
+                where = f"all {n} points"
+            else:
+                where = f"point {cl.current + 1} of {n}"
             self.count_lbl.config(text=f"{cl.clicks:,}")
             self.status_lbl.config(text=f"{cl.status} · {where}")
             self.err_lbl.config(text=f"⚠ {cl.last_error}" if cl.last_error else "")
@@ -1800,11 +1858,6 @@ class App:
         if self.clicker:
             self.clicker.stop()
             return
-        if not self.points:
-            hk = self.hotkeys.get("add")
-            how = f"“Add point” or {hotkey_name(hk)}" if hk else "“Add point”"
-            messagebox.showwarning("Auto Clicker", f"Add at least one click point first ({how}).")
-            return
         try:
             cfg = {
                 "cps": float(self.cps.get()),
@@ -1819,7 +1872,11 @@ class App:
         except ValueError:
             messagebox.showerror("Auto Clicker", "Please enter valid positive numbers.")
             return
-        cfg.update(points=list(self.points), right=self.button.get() == "Right",
+        try:
+            own = user32.GetAncestor(self.root.winfo_id(), GA_ROOT)
+        except Exception:
+            own = None
+        cfg.update(points=list(self.points) or [CursorPoint(own)], right=self.button.get() == "Right",
                    background=self.background.get(), method=self.method.get(),
                    reload_method=self.reload_method.get(), tab_method=self.tab_method.get(),
                    together=self.together.get())

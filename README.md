@@ -20,6 +20,7 @@ pyinstaller --onefile --noconsole autoclicker.py
 ## Features
 
 - A list of click points, clicked in order (one after another) or all at the same time.
+- **No points? It clicks wherever your mouse is.** With an empty point list, Start clicks at the current mouse position using the same speed, button, hold time, offset, breaks and limits. Clicks are skipped while the mouse is over the app's own window, so starting with the Start button doesn't immediately click Stop.
 - Clicks per second, hold time (ms), random offset (± px), left or right button.
 - "After every N clicks, wait X seconds" pause, and an optional total click limit.
 - Per-point reload: after every N clicks on a point, refresh the page or open a URL (one you type, or for tab points the tab's own address), then wait X seconds.
