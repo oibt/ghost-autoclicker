@@ -1,10 +1,10 @@
 """
-Ghost Auto Clicker (Windows) - v7.1
+Ghost Auto Clicker (Windows) - v1.2
 -----------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
 Hotkeys (work even when this window isn't focused; change them on the Hotkeys tab):
-  F6  = Start / Stop
+  F6  = Start / Stop (or set it to "hold": clicks only while the key is held down)
   F7  = Add a click point where your mouse is right now
   F8  = Remove the last point
 
@@ -18,6 +18,8 @@ Two kinds of click points:
 Points are clicked in order (1, 2, 3, ... then back to 1).
 With no points in the list, Start clicks wherever your mouse is.
 """
+VERSION = "1.2"
+
 import base64
 import ctypes
 import ctypes.wintypes as wt
@@ -279,6 +281,16 @@ def load_hotkeys():
         except (TypeError, KeyError, ValueError):
             pass
     return hotkeys
+
+
+def load_hold_mode():
+    return load_settings().get("start_key_mode") == "hold"
+
+
+def save_hold_mode(hold):
+    data = load_settings()
+    data["start_key_mode"] = "hold" if hold else "toggle"
+    save_settings(data)
 
 
 def save_hotkeys(hotkeys):
@@ -1104,6 +1116,8 @@ class App:
         self.flash_job = None
         self.active_row = None
         self.hotkeys = load_hotkeys()
+        self.hold_mode = tk.BooleanVar(value=load_hold_mode())   # start/stop key: hold to click
+        self.holding = False
         self.capturing = None              # action waiting for a new hotkey
 
         root.title("Ghost Auto Clicker")
@@ -1114,6 +1128,7 @@ class App:
         head = ttk.Frame(root, padding=(16, 12, 16, 4))
         head.pack(fill="x")
         ttk.Label(head, text="Ghost Auto Clicker", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text=f"v{VERSION}", style="Muted.TLabel").pack(side="left", padx=(6, 0), pady=(6, 0))
         ttk.Label(head, text="Clicks windows and hidden browser tabs in the background",
                   style="Muted.TLabel").pack(side="left", padx=(12, 0), pady=(6, 0))
         self.topmost = tk.BooleanVar(value=False)
@@ -1141,11 +1156,12 @@ class App:
         self.err_lbl.pack(anchor="w")
         keys = ttk.Frame(foot)
         keys.pack(side="right")
-        self.key_lbls = {}
+        self.key_lbls, self.key_texts = {}, {}
         for action, text in (("toggle", "start / stop"), ("add", "add point"), ("remove", "remove last")):
             self.key_lbls[action] = ttk.Label(keys, style="Key.TLabel")
             self.key_lbls[action].pack(side="left", padx=(12, 4))
-            ttk.Label(keys, text=text, style="Muted.TLabel").pack(side="left")
+            self.key_texts[action] = ttk.Label(keys, text=text, style="Muted.TLabel")
+            self.key_texts[action].pack(side="left")
 
         # Body: point list on the left, settings on the right
         body = ttk.Frame(root, padding=(16, 8, 16, 12))
@@ -1328,9 +1344,16 @@ class App:
                                                                               padx=(4, 0))
         ttk.Button(p, text="Reset to F6 / F7 / F8",
                    command=self.reset_hotkeys).grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
+        self.section(p, 5, "Start / stop key")
+        ttk.Radiobutton(p, text="Toggle: press to start, press again to stop", variable=self.hold_mode,
+                        value=False, command=self.hold_mode_changed).grid(row=6, column=0, columnspan=3,
+                                                                          sticky="w", pady=2)
+        ttk.Radiobutton(p, text="Hold: clicks only while you hold the key down", variable=self.hold_mode,
+                        value=True, command=self.hold_mode_changed).grid(row=7, column=0, columnspan=3,
+                                                                         sticky="w", pady=2)
         self.hotkey_msg = ttk.Label(p, style="Warn.TLabel", wraplength=330, justify="left")
-        self.hotkey_msg.grid(row=5, column=0, columnspan=3, sticky="w")
-        self.note(p, 6, "Click a hotkey, then press the new key. Combinations with Ctrl, Shift and Alt work, "
+        self.hotkey_msg.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.note(p, 9, "Click a hotkey, then press the new key. Combinations with Ctrl, Shift and Alt work, "
                         "and so do the middle and side mouse buttons. Esc cancels.\n\n"
                         "Hotkeys work even when this window isn't focused, so pick keys you don't need in "
                         "other apps. Letter and number hotkeys are ignored while you type in this window.")
@@ -1389,6 +1412,7 @@ class App:
     # --- hotkeys (polled so they work while other apps are focused)
     def hotkey_loop(self):
         prev = {}
+        held = {}                          # vk -> actions whose hotkey is held down right now
         was_capturing = False
         while True:
             capturing = self.capturing is not None
@@ -1408,6 +1432,10 @@ class App:
                         for action, bound in self.hotkeys.items():
                             if bound == hk:
                                 self.events.put(("action", action))
+                                held.setdefault(vk, []).append(action)
+                elif not down and prev.get(vk) and vk in held:
+                    for action in held.pop(vk):
+                        self.events.put(("release", action))
                 prev[vk] = down
             was_capturing = capturing
             time.sleep(0.02)
@@ -1423,7 +1451,14 @@ class App:
                 typing = False
             if typing:
                 return  # the user is typing that key into one of our fields
-        if action == "toggle":
+        if action == "toggle" and self.hold_mode.get():
+            if not self.clicker:
+                self.holding = True
+                self.toggle()
+                # The key may have been let go while a message box was open
+                if not self.holding and self.clicker:
+                    self.clicker.stop()
+        elif action == "toggle":
             self.toggle()
         elif action == "add":
             self.add_point_at_cursor()
@@ -1431,6 +1466,16 @@ class App:
             if self.points and not self.clicker:
                 self.points.pop()
                 self.refresh_points()
+
+    def release_hotkey(self, action):
+        if action == "toggle" and self.hold_mode.get():
+            self.holding = False
+            if self.clicker:
+                self.clicker.stop()
+
+    def hold_mode_changed(self):
+        save_hold_mode(self.hold_mode.get())
+        self.update_key_texts()
 
     def start_capture(self, action):
         was = self.capturing
@@ -1472,11 +1517,17 @@ class App:
     def update_key_texts(self):
         for action, lbl in self.key_lbls.items():
             lbl.config(text=hotkey_name(self.hotkeys[action]))
+        self.key_texts["toggle"].config(text="hold to click" if self.hold_mode.get() else "start / stop")
         for action, btn in self.hotkey_btns.items():
             if action != self.capturing:
                 btn.config(text=hotkey_name(self.hotkeys[action]), style="TButton")
         start = self.hotkeys.get("toggle")
-        start = f"Press {hotkey_name(start)} or Start" if start else "Press Start"
+        if not start:
+            start = "Press Start"
+        elif self.hold_mode.get():
+            start = f"Hold {hotkey_name(start)} (or press Start)"
+        else:
+            start = f"Press {hotkey_name(start)} or Start"
         if self.hotkeys.get("add"):
             add = f"hover over each spot and {self.add_hint()},\nor use “Add point” for a 3 second countdown."
         else:
@@ -1497,6 +1548,8 @@ class App:
             elif ev[0] == "cancel":
                 if self.capturing:
                     self.stop_capture()
+            elif ev[0] == "release":
+                self.release_hotkey(ev[1])
             else:
                 self.run_hotkey(ev[1])
         if self.browser.up:

@@ -1,0 +1,34 @@
+name: Rename release
+
+# Moves an existing release (and its files) to a new tag, e.g. v7.0 -> v1.0,
+# and deletes the old tag. Run it from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Current tag, e.g. v7.0"
+        required: true
+      to:
+        description: "New tag, e.g. v1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      FROM: ${{ inputs.from }}
+      TO: ${{ inputs.to }}
+    steps:
+      - name: Rename
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$REPO/git/ref/tags/$FROM" --jq .object.sha)
+          gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TO" -f sha="$sha" >/dev/null
+          gh release edit "$FROM" --repo "$REPO" --tag "$TO" --title "Ghost Auto Clicker $TO"
+          gh api -X DELETE "repos/$REPO/git/refs/tags/$FROM"
+          gh release view "$TO" --repo "$REPO"

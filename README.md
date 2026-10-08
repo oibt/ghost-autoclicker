@@ -33,7 +33,7 @@ pyinstaller --onefile --noconsole autoclicker.py
   | F7  | Add a point under the mouse |
   | F8  | Remove the last point |
 
-  You can change them on the **Hotkeys** tab: click a hotkey and press the new key. Ctrl/Shift/Alt combinations and the middle and side mouse buttons work, Esc cancels, and "Clear" removes a hotkey. If you pick a key another action already uses, it moves to the new action. Hotkeys are saved in `%LOCALAPPDATA%\AutoClicker\settings.json`. Letter and number hotkeys are ignored while you're typing in one of the app's own fields.
+  You can change them on the **Hotkeys** tab: click a hotkey and press the new key. Ctrl/Shift/Alt combinations and the middle and side mouse buttons work, Esc cancels, and "Clear" removes a hotkey. If you pick a key another action already uses, it moves to the new action. The start/stop key can work as a **toggle** (press to start, press again to stop) or **hold** (clicks only while you hold the key down). Hotkeys are saved in `%LOCALAPPDATA%\AutoClicker\settings.json`. Letter and number hotkeys are ignored while you're typing in one of the app's own fields.
 
 ## Interface
 
