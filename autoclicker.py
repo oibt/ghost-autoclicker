@@ -1,6 +1,6 @@
 """
-Ghost Auto Clicker (Windows) - v1.2
------------------------------------
+Ghost Auto Clicker (Windows) - v1.2.1
+-------------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
 Hotkeys (work even when this window isn't focused; change them on the Hotkeys tab):
@@ -18,7 +18,7 @@ Two kinds of click points:
 Points are clicked in order (1, 2, 3, ... then back to 1).
 With no points in the list, Start clicks wherever your mouse is.
 """
-VERSION = "1.2"
+VERSION = "1.2.1"
 
 import base64
 import ctypes
@@ -117,6 +117,98 @@ BROWSERS = {
 }
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# App icon (a ghost with a mouse pointer), drawn by assets/make_icon.py
+GHOST_ICON_64 = (
+    "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"
+    "gg=="
+)
+GHOST_ICON_32 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAHZElEQVR42q2Xa4xdVRXHf2ufx310nkBbEIU2gfIqjOWRShGV"
+    "+AF5CUFEP1BImmAixOADTUTxciNVYhBN/GAEUT9gVCIRNSohMQa1LQ+BDo+2U9vSKS2RGV7zuHPvPWfvtfxw7p3OTKclJexk"
+    "3Zy7b+5aa6/1///XPkJn1Wrm6nXRznOaDGRnhuCWqnpRDcJ7WM5F5lxsgr7Rn6TbbrtN2gtjSbFRc/V6XWu1V8pSOeErRG69"
+    "qj81cknM+7CC5t65eLfAQzo9fl+9fuJMNwnpPtxx9xsnxnHPo5VK6fx2K+B9GzO19yMBESdxnFIqx7Sa7WGfz1y98c5jRms1"
+    "c1KrmZvso1SZmd5UqfSsacxMZoLEAu7wHovSGd2Pd18GCuYr1b601Wy8nPjGR2DZjKvXRdPJidsqlZ41U5MTGUpqak7VWGhg"
+    "mBk+N9ptI8/m7y/2n66ZmjMlnZ6cyCrlJWe1pfK1el1Ubqq9Ul6m/S8lSXVlnjUREXcomCAEo9kykljo7RVKqRACTDeMmaaS"
+    "JMWe6rtUwkzjpIzPW/u12TozXpoPnG7CiqzddGAsbLuLoNEwqhXhEx8tMXR2yvHLI0ophADvTCg7d3m2PN3m1Vc91aocuTWC"
+    "y9tNRORDWkrOjtXr8ihJohAyA5GFJ5+aMs5YlfC565awbGk0z1eSwPHliOOXR6xbm/L431v87fEZ0lTepQpokqTOvF8eB+8R"
+    "F6NBu6ycDT49ZQydXeLmDX1EEWRZwDkhitzckuK9EseOyy+tMDAgPPSbKcolweywCaBOCSEUSF8EMLRbynHHOm5a30vUOXia"
+    "RsSx61CrMOeENI1wTvDBWLe2zCUXV5iaCoChYXFQBjXw4HzwaNB5Zqa0WsoVl1WplAtgtdsZG7/7CzZvGkYEQijQ1phuUq/d"
+    "z3PP7SCOhBCMKy6rMjjgyNqFr4X+uxZCwAXobBTZFqc3jjvWsWaojKriHNx3768ZGdnL9zb+ktdff2sWLfd8/1fs2XOAeu0B"
+    "JiamcQ6qVce5Hy4x0wiY2qzveeaL/jjaEOaW34xWK7Di5JhS6SCtXhj+LyM7RtmxfS+vHRjHuaIVW7fuZOfIPrZv28P4+NuI"
+    "FCw4fVVaoO0I2hACOE9A/fzS+FwZHCgarx1annfBmTz97DOUyyVWrDwB7WS25tzTePKZLQwO9vGBE47DzBBgcNARRUbwR2qB"
+    "J8aDRjYbSAANNktk10H8LbdeR9bOuPhjaxgc7JvFwO1fX08cRXzq8nVUl1QIwYgiiCLBFIK3xVkgBgFi7z2xxJ0TCU5AVWcF"
+    "STrUrFbL3PHtDbNOulTs61vCd+66ec7gORhIDyOLZsVv3gdiAAsHFVCR4rvNGSMIZkYIinMy2/9uEFVjZGSU4APnDJ3aCWwL"
+    "/MxPwKRT4RC6Tg5aCIotyF5EiONoXvCusziOGB97i9qdP+PFF3bjnCPPQwdselgLIRDjA0p8CAbsqG8Cwq1fup5//fN5ZprT"
+    "rF49RJ7lJEl0RAw4H1gEoYGjvYvkuSdOIr5462fY/O+t/PHRp+jt7cN73+H+YYQI/OLze04JDtfHeed3QpZ5RIQvf3U9o3tH"
+    "GNn+JGncQwiLxwgeXPAsrlTKPM2fG9AOmZvdAdYFq/HNb93IVVc32LXrKeKoFw3hkBiFEi7aggIkZsXMHx/LEQHVwkRgbCyf"
+    "Tcqsa4aI0L3T3P6Nz3LNtW8xOvoEQtpJogPCoPgQcH6RFgRvRK4IdO89+9lw406ef67Qeefg6aem2HDDTn78wwNEkUME4giS"
+    "JAUMEc9LL+7hmqvuZ/j5iHZ7D83m25i5WdpqKEAYrTrlllMEd4Oqx6yobLMZOGv1EnZsn+H3D79BqeTYsnmSoTU9vP6/nLvv"
+    "2ocB219qEFT54EkVHvjpdlas9Pz8/i08/LutrDot5ZGHm5SSjzM4cHqhJZ2qYmZCJCG0fytXXjp8rhP3jMicW7BBFAvNmUCp"
+    "VJwwz404LgZN8EaSFBeOdtvTP9DH/gPP4uJNVJIbGBt/hR/8aCl/+fM+hp89g4HByiJ3RTFRvchVJhrbTW0vlqoG1W6PsnYg"
+    "SYQQFO+LkdwdLM6B94VgJYmjMdWip7qM1F1Lb28/A/0r+MMjo1z/+dOYae4CKx3sf1DFEg3eH0ha7sVo2/4H/SkrvtCXxv2f"
+    "zPNGjhHNgkvtIMC6umB0aNrdBwg410OSVMiyJpVyL/tGxyEa4cA+j5OTMPOdGWB5Gg/E3jd+8ug/hh6TWs3c5s3Dldjbk0nc"
+    "tzrL38kEEkTkaFRwlhJSDDC1nDff3Mexx6zEOYeZmkGeJv2p91M7tdG+YO1la6cFzIHo5RduOtnSvj8lcc85eZhGNesy/j2+"
+    "nglxnOJ9S0DEuYQ46sWH6W2WtT/92Obzd4M5B6JQc3/dctGof/u1de1ssh582G2KYalgiXtvFjufB4elYopp0D1ZNrHxzZlX"
+    "LyyC1xyIzilzzUFdAa487z/VrFpejfllqpkrWq9ydOd3VihpZEh5LIvGXn7iiUumAWqYq1O8nv8f/bmGv3CbXwAAAAAASUVO"
+    "RK5CYII="
+)
 
 
 # ---------------------------------------------------------------- win32 helpers
@@ -1121,6 +1213,7 @@ class App:
         self.capturing = None              # action waiting for a new hotkey
 
         root.title("Ghost Auto Clicker")
+        self.set_icon()
         root.minsize(940, 560)
         self.apply_theme()
 
@@ -1359,6 +1452,18 @@ class App:
                         "other apps. Letter and number hotkeys are ignored while you type in this window.")
 
         self.update_speed_hint()
+
+    def set_icon(self):
+        try:
+            # Own taskbar entry, so Windows shows our icon instead of Python's
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GhostAutoClicker")
+        except Exception:
+            pass
+        try:
+            self.icons = [tk.PhotoImage(data=GHOST_ICON_64), tk.PhotoImage(data=GHOST_ICON_32)]
+            self.root.iconphoto(True, *self.icons)
+        except tk.TclError:
+            pass
 
     # --- theme
     def apply_theme(self):

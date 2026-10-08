@@ -35,7 +35,7 @@ jobs:
       - name: Build exe
         run: |
           python -m pip install --upgrade pip pyinstaller
-          pyinstaller --onefile --noconsole --name GhostAutoClicker autoclicker.py
+          pyinstaller --onefile --noconsole --name GhostAutoClicker --icon assets/ghost.ico autoclicker.py
 
       - name: Publish release
         env:

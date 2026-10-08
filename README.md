@@ -1,3 +1,5 @@
+<img src="assets/ghost.png" width="96" alt="Ghost Auto Clicker icon">
+
 # Ghost Auto Clicker (Windows)
 
 A single-file auto clicker that can click in the background: on windows sitting behind others, on hidden browser tabs, and on other Windows virtual desktops.
@@ -12,7 +14,7 @@ python autoclicker.py
 Optional standalone exe:
 
 ```
-pyinstaller --onefile --noconsole autoclicker.py
+pyinstaller --onefile --noconsole --icon assets/ghost.ico autoclicker.py
 ```
 
 ![Ghost Auto Clicker, light theme](docs/screenshot-light.png)
