@@ -1,0 +1,25 @@
+name: Icon check
+
+# Downloads a release's GhostAutoClicker.exe on a fresh Windows machine (no icon cache)
+# and prints the icons Windows gives File Explorer for it.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to check, e.g. v1.2.2"
+        required: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the exe
+        run: gh release download "${{ inputs.tag }}" -p GhostAutoClicker.exe -D dl
+      - name: Show the icons Windows uses
+        run: python .github/scripts/show_exe_icons.py dl/GhostAutoClicker.exe
