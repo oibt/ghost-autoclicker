@@ -1,0 +1,38 @@
+name: Update release notes
+
+# Sets each release's description from release-notes/<tag>.md (plus the
+# shared download instructions in release-notes/_downloads.md).
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Tags to update, separated by spaces, or 'all'"
+        required: true
+        default: "all"
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAGS: ${{ inputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update
+        run: |
+          set -euo pipefail
+          if [ "$TAGS" = "all" ]; then
+            TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          fi
+          for tag in $TAGS; do
+            if [ ! -f "release-notes/$tag.md" ]; then
+              echo "::warning::No release-notes/$tag.md, skipping $tag"
+              continue
+            fi
+            cat "release-notes/$tag.md" release-notes/_downloads.md > notes.md
+            gh release edit "$tag" --notes-file notes.md
+            echo "Updated $tag"
+          done
