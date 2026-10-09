@@ -38,6 +38,9 @@ jobs:
           python -m pip install --upgrade pip pyinstaller
           pyinstaller --onefile --noconsole --name GhostAutoClicker --icon assets/ghost.ico autoclicker.py
 
+      - name: Check the exe icon
+        run: python .github/scripts/check_exe_icon.py dist/GhostAutoClicker.exe assets/ghost.ico
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

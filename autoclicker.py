@@ -1,5 +1,5 @@
 """
-Ghost Auto Clicker (Windows) - v1.2.1
+Ghost Auto Clicker (Windows) - v1.2.2
 -------------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
@@ -18,7 +18,7 @@ Two kinds of click points:
 Points are clicked in order (1, 2, 3, ... then back to 1).
 With no points in the list, Start clicks wherever your mouse is.
 """
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 import base64
 import ctypes

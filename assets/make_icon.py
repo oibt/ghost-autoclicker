@@ -2,7 +2,7 @@
 
 Writes ghost.ico (for the .exe), ghost.png and ghost-64.png / ghost-32.png. The app embeds
 ghost-64.png and ghost-32.png as base64 (GHOST_ICON_64 / GHOST_ICON_32 in autoclicker.py)."""
-import math, sys
+import io, math, struct, sys
 from PIL import Image, ImageDraw
 N = 1024
 img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
@@ -47,10 +47,45 @@ def arrow(ox, oy, s):
     return [(ox + x * s, oy + y * s) for x, y in p]
 d.polygon(arrow(600, 520, 22), fill=(255, 255, 255, 255), outline=eye, width=16)
 
+def write_ico(img, path, sizes=(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)):
+    """Write a .ico the classic way: 32-bit bitmaps below 256 px, PNG only at 256 px.
+    (Pillow stores every size as PNG, and Explorer then shows the default icon in some views.)"""
+    entries = []
+    for size in sizes:
+        im = img.resize((size, size), Image.LANCZOS)
+        if size >= 256:
+            buf = io.BytesIO()
+            im.save(buf, "PNG", optimize=True)
+            entries.append((size, buf.getvalue()))
+            continue
+        px = im.load()
+        xor = bytearray()
+        for y in range(size - 1, -1, -1):                  # bitmaps are stored bottom-up
+            for x in range(size):
+                r, g, b, a = px[x, y]
+                xor += bytes((b, g, r, a))
+        row = ((size + 31) // 32) * 4                      # 1-bit mask rows, padded to 4 bytes
+        mask = bytearray()
+        for y in range(size - 1, -1, -1):
+            bits = bytearray(row)
+            for x in range(size):
+                if px[x, y][3] == 0:                       # fully transparent pixel
+                    bits[x // 8] |= 0x80 >> (x % 8)
+            mask += bits
+        header = struct.pack("<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0, len(xor) + len(mask), 0, 0, 0, 0)
+        entries.append((size, header + bytes(xor) + bytes(mask)))
+    data = struct.pack("<HHH", 0, 1, len(entries))
+    offset = 6 + 16 * len(entries)
+    for size, blob in entries:
+        dim = 0 if size >= 256 else size                   # 0 means 256
+        data += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(blob), offset)
+        offset += len(blob)
+    with open(path, "wb") as f:
+        f.write(data + b"".join(blob for _, blob in entries))
+
+
 out = sys.argv[1]
 img.resize((256, 256), Image.LANCZOS).save(f"{out}/ghost.png", optimize=True)
-sizes = [16, 24, 32, 48, 64, 128, 256]
-icons = [img.resize((s, s), Image.LANCZOS) for s in sizes]
-icons[-1].save(f"{out}/ghost.ico", sizes=[(s, s) for s in sizes], append_images=icons[:-1])
+write_ico(img, f"{out}/ghost.ico")
 for s in (64, 32):
     img.resize((s, s), Image.LANCZOS).save(f"{out}/ghost-{s}.png", optimize=True)
