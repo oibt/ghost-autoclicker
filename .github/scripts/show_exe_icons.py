@@ -4,11 +4,15 @@ usage: python show_exe_icons.py GhostAutoClicker.exe
   W = white, I = indigo (the ghost icon), . = empty, o = anything else
 """
 import ctypes
+import os
 import ctypes.wintypes as wt
 import sys
 
-path = sys.argv[1]
+path = os.path.abspath(sys.argv[1])          # the shell wants a full Windows path
 shell32, user32, gdi32 = ctypes.windll.shell32, ctypes.windll.user32, ctypes.windll.gdi32
+ctypes.windll.ole32.CoInitialize(None)          # SHGetFileInfo needs COM
+shell32.SHGetFileInfoW.argtypes = [wt.LPCWSTR, wt.DWORD, ctypes.c_void_p, wt.UINT, wt.UINT]
+shell32.SHGetFileInfoW.restype = ctypes.c_size_t
 for f in (user32.GetDC, gdi32.CreateCompatibleDC, gdi32.CreateDIBSection, gdi32.SelectObject):
     f.restype = ctypes.c_void_p
 user32.DrawIconEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int,
@@ -62,6 +66,7 @@ def show(label, hicon, size):
         print("   ", row)
 
 
+print("file:", path)
 print("system small icon size:", user32.GetSystemMetrics(49), "large:", user32.GetSystemMetrics(11))
 
 # What Explorer's small views (Small icons, List, Details, Content) and large views use
