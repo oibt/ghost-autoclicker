@@ -1,6 +1,6 @@
 """
-Ghost Auto Clicker (Windows) - v1.2.2
--------------------------------------
+Ghost Auto Clicker (Windows) - v1.3
+-----------------------------------
 Run:   python autoclicker.py        (Python 3.8+, no extra packages needed)
 
 Hotkeys (work even when this window isn't focused; change them on the Hotkeys tab):
@@ -18,7 +18,7 @@ Two kinds of click points:
 Points are clicked in order (1, 2, 3, ... then back to 1).
 With no points in the list, Start clicks wherever your mouse is.
 """
-VERSION = "1.2.2"
+VERSION = "1.3"
 
 import base64
 import ctypes
@@ -72,6 +72,13 @@ user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 user32.mouse_event.argtypes = [wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD, ctypes.c_size_t]
 user32.keybd_event.argtypes = [wt.BYTE, wt.BYTE, wt.DWORD, ctypes.c_size_t]
+user32.GetForegroundWindow.restype = wt.HWND
+user32.SetForegroundWindow.argtypes = [wt.HWND]
+user32.BringWindowToTop.argtypes = [wt.HWND]
+user32.IsIconic.argtypes = [wt.HWND]
+user32.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
+user32.AttachThreadInput.argtypes = [wt.DWORD, wt.DWORD, wt.BOOL]
+kernel32 = ctypes.WinDLL("kernel32")
 
 WM_KEYDOWN, WM_KEYUP, WM_CHAR = 0x0100, 0x0101, 0x0102
 VK_RETURN, VK_DELETE, VK_F6_KEY = 0x0D, 0x2E, 0x75
@@ -84,13 +91,21 @@ RELOAD_CMD = "Browser refresh command"
 RELOAD_F5 = "F5 key"
 
 WM_MOUSEMOVE = 0x0200
+WM_ACTIVATE, WM_SETFOCUS, WM_ACTIVATEAPP, WM_NCACTIVATE = 0x0006, 0x0007, 0x001C, 0x0086
+WA_ACTIVE = 1
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
 WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 MK_LBUTTON, MK_RBUTTON = 0x0001, 0x0002
-MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
+MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0001, 0x0002, 0x0004
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 GA_ROOT = 2
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_ESCAPE = 0x10, 0x11, 0x12, 0x1B
+
+# How window points are clicked (Windows tab)
+MODE_POST = "post"            # post click messages to the window (background)
+MODE_GAME = "game"            # same, but first tell the window it's the active one
+MODE_SWITCH = "switch"        # bring the window forward for a moment, click with real input, switch back
+MODE_FOREGROUND = "foreground"  # move the real mouse and click whatever is there
 
 METHOD_AUTO = "Auto (recommended)"
 METHOD_MAIN = "Main window"
@@ -269,6 +284,27 @@ def open_url_in_window(hwnd, url, wait):
     wait(0.25)
     post_key(hwnd, VK_DELETE, SCAN_DELETE, extended=True)  # drop autocomplete suggestion
     post_key(hwnd, VK_RETURN, SCAN_RETURN)
+
+
+def is_roblox(hwnd):
+    return bool(hwnd) and (class_name(hwnd) == "WINDOWSCLIENT" or window_text(hwnd) == "Roblox")
+
+
+def force_foreground(hwnd):
+    """Bring a window to the front. Windows only lets the app that has focus do this,
+    so briefly share input with whichever app is in front right now."""
+    fg = user32.GetForegroundWindow()
+    if not hwnd or fg == hwnd:
+        return
+    me = kernel32.GetCurrentThreadId()
+    other = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+    attached = bool(other and other != me and user32.AttachThreadInput(me, other, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, other, False)
 
 
 def find_browser(name):
@@ -716,8 +752,16 @@ class Clicker(threading.Thread):
     def press_window(self, t, dx, dy):
         c = self.cfg
         hold = c["hold"]
-        if c["background"]:
+        if c["window_mode"] == MODE_SWITCH:
+            self.press_switch(t, dx, dy)
+        elif c["background"]:
             hwnd, (cx, cy) = t.endpoint(c["method"])
+            if c["window_mode"] == MODE_GAME:
+                # Many games ignore input while they think they're in the background
+                user32.PostMessageW(t.root, WM_ACTIVATEAPP, 1, 0)
+                user32.PostMessageW(t.root, WM_NCACTIVATE, 1, 0)
+                user32.PostMessageW(t.root, WM_ACTIVATE, WA_ACTIVE, 0)
+                user32.PostMessageW(hwnd, WM_SETFOCUS, 0, 0)
             if c["right"]:
                 down, up, mk = WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON
             else:
@@ -738,6 +782,37 @@ class Clicker(threading.Thread):
             if hold:
                 self.stop_evt.wait(hold)
             user32.mouse_event(u, 0, 0, 0, 0)
+
+    def press_switch(self, t, dx, dy):
+        """Quick switch: bring the game forward, click with real input, then put your
+        window and mouse back. For games that only accept input while in front."""
+        c = self.cfg
+        if user32.IsIconic(t.root):
+            raise SkipClick("the game window is minimized")
+        pt = wt.POINT(t.root_xy[0] + dx, t.root_xy[1] + dy)
+        user32.ClientToScreen(t.root, ctypes.byref(pt))      # where the spot is now, even if the window moved
+        if c["right"]:
+            d, u = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+        else:
+            d, u = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+        prev_win = user32.GetForegroundWindow()
+        prev_pos = cursor_pos()
+        try:
+            if prev_win != t.root:
+                force_foreground(t.root)
+                self.stop_evt.wait(c["focus_wait"])            # let the game notice it's in front
+            user32.SetCursorPos(pt.x, pt.y)
+            user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)   # a real move, so the game sees the pointer here
+            user32.mouse_event(MOUSEEVENTF_MOVE, -1 & 0xFFFFFFFF, 0, 0, 0)
+            self.stop_evt.wait(0.02)
+            user32.mouse_event(d, 0, 0, 0, 0)
+            self.stop_evt.wait(max(c["hold"], 0.03))           # at least two frames, or games can miss it
+            user32.mouse_event(u, 0, 0, 0, 0)
+            self.stop_evt.wait(0.02)
+        finally:
+            user32.SetCursorPos(*prev_pos)
+            if prev_win and prev_win != t.root:
+                force_foreground(prev_win)
 
     def reload_window(self, t):
         if t.reload_url:
@@ -989,7 +1064,9 @@ class Clicker(threading.Thread):
         # Foreground window points all share your real mouse, so they form one group.
         groups = {}
         for i, t in enumerate(points):
-            key = self.page_key(t) if (t.kind == "tab" or c["background"]) else ("foreground",)
+            # Quick switch and foreground use your real mouse, so those points take turns
+            shared_mouse = t.kind == "window" and c["window_mode"] in (MODE_SWITCH, MODE_FOREGROUND)
+            key = ("foreground",) if shared_mouse else self.page_key(t)
             groups.setdefault(key, []).append(i)
         pool = ThreadPoolExecutor(max_workers=max(1, min(32, len(groups))))
         self.current = -1
@@ -1402,27 +1479,39 @@ class App:
         # Window points
         p = self.page(nb, "Windows")
         self.section(p, 0, "Window points (any app or browser)", first=True)
-        self.background = tk.BooleanVar(value=True)
-        ttk.Radiobutton(p, text="Background", variable=self.background,
-                        value=True).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
-        ttk.Label(p, text="Window can be behind others, your mouse stays free",
-                  style="Muted.TLabel").grid(row=2, column=0, columnspan=3, sticky="w", padx=(24, 0))
-        ttk.Radiobutton(p, text="Foreground", variable=self.background,
-                        value=False).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        ttk.Label(p, text="Moves your real mouse, works with everything",
-                  style="Muted.TLabel").grid(row=4, column=0, columnspan=3, sticky="w", padx=(24, 0))
-        self.section(p, 5, "Advanced")
+        self.window_mode = tk.StringVar(value=MODE_POST)
+        r = 1
+        for mode, title, sub in (
+                (MODE_POST, "Background", "Window can be behind others, your mouse stays free"),
+                (MODE_GAME, "Background for games", "Also tells the window it's active. Try this first for a game"),
+                (MODE_SWITCH, "Quick switch (games like Roblox)",
+                 "Brings the game forward for a split second per click, then\n"
+                 "puts your window and mouse back. Use 1-5 clicks a second"),
+                (MODE_FOREGROUND, "Foreground", "Moves your real mouse, works with everything")):
+            ttk.Radiobutton(p, text=title, variable=self.window_mode,
+                            value=mode).grid(row=r, column=0, columnspan=3, sticky="w", pady=(2 if r == 1 else 8, 0))
+            ttk.Label(p, text=sub, style="Muted.TLabel", justify="left").grid(row=r + 1, column=0, columnspan=3,
+                                                                             sticky="w", padx=(24, 0))
+            r += 2
+        self.section(p, r, "Advanced")
         self.method = tk.StringVar(value=METHOD_AUTO)
-        self.field(p, 6, "Send clicks to", ttk.Combobox(p, textvariable=self.method,
-                                                        values=[METHOD_AUTO, METHOD_MAIN, METHOD_CHILD],
-                                                        state="readonly", width=22))
+        self.field(p, r + 1, "Send clicks to", ttk.Combobox(p, textvariable=self.method,
+                                                            values=[METHOD_AUTO, METHOD_MAIN, METHOD_CHILD],
+                                                            state="readonly", width=22))
         self.reload_method = tk.StringVar(value=RELOAD_CMD)
-        self.field(p, 7, "Reload using", ttk.Combobox(p, textvariable=self.reload_method,
-                                                      values=[RELOAD_CMD, RELOAD_F5], state="readonly", width=22))
+        self.field(p, r + 2, "Reload using", ttk.Combobox(p, textvariable=self.reload_method,
+                                                          values=[RELOAD_CMD, RELOAD_F5], state="readonly",
+                                                          width=22))
+        self.focus_wait = tk.StringVar(value="60")
+        wait_box = ttk.Frame(p)
+        ttk.Spinbox(wait_box, from_=0, to=1000, increment=10, textvariable=self.focus_wait,
+                    width=8).pack(side="left")
+        ttk.Label(wait_box, text="ms", style="Muted.TLabel").pack(side="left", padx=(6, 0))
+        self.field(p, r + 3, "Quick switch wait", wait_box)
         ttk.Button(p, text="Restart browser with background clicking",
-                   command=self.launch_browser).grid(row=8, column=0, columnspan=3, sticky="w", pady=(12, 4))
-        self.note(p, 9, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
-                        "the Browser tabs page.")
+                   command=self.launch_browser).grid(row=r + 4, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.note(p, r + 5, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
+                            "the Browser tabs page.")
 
         # Hotkeys
         p = self.page(nb, "Hotkeys")
@@ -1767,6 +1856,8 @@ class App:
             point = WindowPoint(sx, sy)
         self.points.append(point)
         self.refresh_points(select=len(self.points) - 1)
+        if point.kind == "window" and is_roblox(point.root) and self.window_mode.get() in (MODE_POST, MODE_GAME):
+            self.flash("Roblox point added. If its clicks don't register, choose “Quick switch” on the Windows tab.")
 
     def selected_indices(self):
         return sorted(int(s) for s in self.tree.selection())
@@ -2024,6 +2115,7 @@ class App:
                 "limit": int(float(self.limit.get() or 0)),
                 "hold": float(self.hold.get() or 0) / 1000.0,
                 "jitter": int(float(self.jitter.get() or 0)),
+                "focus_wait": float(self.focus_wait.get() or 0) / 1000.0,
             }
             if min(cfg.values()) < 0 or cfg["cps"] <= 0:
                 raise ValueError
@@ -2035,7 +2127,8 @@ class App:
         except Exception:
             own = None
         cfg.update(points=list(self.points) or [CursorPoint(own)], right=self.button.get() == "Right",
-                   background=self.background.get(), method=self.method.get(),
+                   window_mode=self.window_mode.get(), background=self.window_mode.get() != MODE_FOREGROUND,
+                   method=self.method.get(),
                    reload_method=self.reload_method.get(), tab_method=self.tab_method.get(),
                    together=self.together.get())
 
@@ -2059,6 +2152,15 @@ class App:
                     messagebox.showerror("Auto Clicker",
                                          f"The tab for point {i + 1} was closed. Remove it and add it again.")
                     return
+        if has_window and cfg["window_mode"] == MODE_SWITCH and not getattr(self, "switch_warned", False):
+            if not messagebox.askokcancel(
+                    "Auto Clicker",
+                    "Quick switch brings the game window to the front for a split second on every click, "
+                    "then switches back to what you were doing and puts your mouse back.\n\n"
+                    "Use a low speed (1-5 clicks a second), and don't minimize the game. While it's clicking, "
+                    "a key you press at that moment can land in the game."):
+                return
+            self.switch_warned = True
         if has_window and not cfg["background"] and not getattr(self, "fg_warned", False):
             if not messagebox.askokcancel(
                     "Auto Clicker",

@@ -51,6 +51,8 @@ pyinstaller --onefile --noconsole --icon assets/ghost.ico autoclicker.py
 ### Window points (`WindowPoint`): any app
 
 - **Background mode** posts `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP` to the window. For Chromium windows, the "Auto" send-to option posts to the top-level `Chrome_WidgetWin_1` and not to `Chrome_RenderWidgetHostHWND`. Posting to the child registered only the first click on many sites.
+- **Background for games** posts the same messages, but first sends `WM_ACTIVATEAPP` / `WM_NCACTIVATE` / `WM_ACTIVATE` / `WM_SETFOCUS` so the game thinks it's the active window (many games ignore input otherwise).
+- **Quick switch (games like Roblox)**: for games that only take real input while in front. For each click it brings the game forward (`AttachThreadInput` + `SetForegroundWindow`), waits the "Quick switch wait" (60 ms by default), moves the cursor there with a small real move, clicks with `mouse_event` (held at least 30 ms), then puts the previous window and the mouse back. Use a low speed (1–5 clicks a second); a minimized game is skipped.
 - **Foreground mode** uses `SetCursorPos` + `mouse_event`, which takes over the real mouse.
 - **Reload** sends `WM_APPCOMMAND` browser refresh or a posted F5. "Open URL" posts F6 (focus the omnibox), sends `WM_CHAR` for each character, then Delete (drops autocomplete) and Enter. It waits 0.35 s after F6 so that "/" doesn't go to the page.
 - **"Restart browser with background clicking"** (Windows tab) relaunches the browser with flags that stop it pausing hidden or covered windows. This also works across Windows virtual desktops.
