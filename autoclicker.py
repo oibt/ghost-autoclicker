@@ -79,6 +79,18 @@ user32.IsIconic.argtypes = [wt.HWND]
 user32.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
 user32.AttachThreadInput.argtypes = [wt.DWORD, wt.DWORD, wt.BOOL]
 kernel32 = ctypes.WinDLL("kernel32")
+kernel32.GetTickCount.restype = wt.DWORD
+user32.SetLayeredWindowAttributes.argtypes = [wt.HWND, wt.DWORD, wt.BYTE, wt.DWORD]
+_get_win_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)   # no *Ptr* on 32-bit Windows
+_set_win_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+_get_win_long.argtypes = [wt.HWND, ctypes.c_int]
+_get_win_long.restype = ctypes.c_ssize_t
+_set_win_long.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
+GWL_EXSTYLE, WS_EX_LAYERED, LWA_ALPHA = -20, 0x00080000, 0x2
+
+
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
 
 WM_KEYDOWN, WM_KEYUP, WM_CHAR = 0x0100, 0x0101, 0x0102
 VK_RETURN, VK_DELETE, VK_F6_KEY = 0x0D, 0x2E, 0x75
@@ -305,6 +317,26 @@ def force_foreground(hwnd):
     finally:
         if attached:
             user32.AttachThreadInput(me, other, False)
+
+
+def make_see_through(hwnd):
+    """Make a window almost invisible (it still gets clicks). Returns what restore_window needs."""
+    style = _get_win_long(hwnd, GWL_EXSTYLE)
+    _set_win_long(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+    user32.SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA)
+    return style
+
+
+def restore_window(hwnd, style):
+    if user32.IsWindow(hwnd):
+        user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+        _set_win_long(hwnd, GWL_EXSTYLE, style)
+
+
+def last_input_tick():
+    info = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+    user32.GetLastInputInfo(ctypes.byref(info))
+    return info.dwTime
 
 
 def find_browser(name):
@@ -753,7 +785,7 @@ class Clicker(threading.Thread):
         c = self.cfg
         hold = c["hold"]
         if c["window_mode"] == MODE_SWITCH:
-            self.press_switch(t, dx, dy)
+            return self.press_switch(t, dx, dy)
         elif c["background"]:
             hwnd, (cx, cy) = t.endpoint(c["method"])
             if c["window_mode"] == MODE_GAME:
@@ -785,8 +817,11 @@ class Clicker(threading.Thread):
 
     def press_switch(self, t, dx, dy):
         """Quick switch: bring the game forward, click with real input, then put your
-        window and mouse back. For games that only accept input while in front."""
+        window and mouse back. For games that only accept input while in front.
+        Returns how many clicks it made."""
         c = self.cfg
+        if c["idle_only"] and self.idle_seconds() < c["idle_secs"]:
+            raise SkipClick("you're using the computer, clicking when you stop")
         if user32.IsIconic(t.root):
             raise SkipClick("the game window is minimized")
         pt = wt.POINT(t.root_xy[0] + dx, t.root_xy[1] + dy)
@@ -795,24 +830,47 @@ class Clicker(threading.Thread):
             d, u = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
         else:
             d, u = MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+        count = c["burst"]
+        if c["limit"] and not c["together"]:
+            count = max(1, min(count, c["limit"] - self.clicks))
         prev_win = user32.GetForegroundWindow()
         prev_pos = cursor_pos()
+        done = 0
         try:
             if prev_win != t.root:
                 force_foreground(t.root)
-                self.stop_evt.wait(c["focus_wait"])            # let the game notice it's in front
-            user32.SetCursorPos(pt.x, pt.y)
-            user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)   # a real move, so the game sees the pointer here
-            user32.mouse_event(MOUSEEVENTF_MOVE, -1 & 0xFFFFFFFF, 0, 0, 0)
-            self.stop_evt.wait(0.02)
-            user32.mouse_event(d, 0, 0, 0, 0)
-            self.stop_evt.wait(max(c["hold"], 0.03))           # at least two frames, or games can miss it
-            user32.mouse_event(u, 0, 0, 0, 0)
-            self.stop_evt.wait(0.02)
+                # Wait only until the game is actually in front (up to the max wait)
+                deadline = time.perf_counter() + c["focus_wait"]
+                while user32.GetForegroundWindow() != t.root and time.perf_counter() < deadline:
+                    if self.stop_evt.wait(0.005):
+                        return done
+                self.stop_evt.wait(0.016)                      # one frame, so the game notices
+            for k in range(count):
+                if k and self.stop_evt.wait(0.05):             # short gap between clicks in one switch
+                    break
+                user32.SetCursorPos(pt.x, pt.y)
+                user32.mouse_event(MOUSEEVENTF_MOVE, 1, 0, 0, 0)   # a real move, so the game sees the pointer
+                user32.mouse_event(MOUSEEVENTF_MOVE, -1 & 0xFFFFFFFF, 0, 0, 0)
+                self.stop_evt.wait(0.016)
+                user32.mouse_event(d, 0, 0, 0, 0)
+                self.stop_evt.wait(max(c["hold"], 0.03))       # at least two frames, or games can miss it
+                user32.mouse_event(u, 0, 0, 0, 0)
+                done += 1
+            self.stop_evt.wait(0.016)
         finally:
             user32.SetCursorPos(*prev_pos)
             if prev_win and prev_win != t.root:
                 force_foreground(prev_win)
+            self.own_input_end = kernel32.GetTickCount()
+        return done
+
+    def idle_seconds(self):
+        """How long you haven't touched the mouse or keyboard (our own clicks don't count)."""
+        last = last_input_tick()
+        newer = (last - self.own_input_end) & 0xFFFFFFFF
+        if 30 < newer < 0x80000000:          # input after our last click ended: that was you
+            self.user_input = last
+        return ((kernel32.GetTickCount() - self.user_input) & 0xFFFFFFFF) / 1000.0
 
     def reload_window(self, t):
         if t.reload_url:
@@ -881,7 +939,7 @@ class Clicker(threading.Thread):
         elif t.kind == "cursor":
             self.press_cursor(t, dx, dy)
         else:
-            self.press_window(t, dx, dy)
+            return self.press_window(t, dx, dy)   # quick switch can click several times
 
     def reload_page(self, t):
         if t.kind == "tab":
@@ -897,14 +955,26 @@ class Clicker(threading.Thread):
         self.page_locks = {}
         self.page_locks_lock = threading.Lock()
         self.per_point = [0] * n          # clicks on each point (shown in the list)
+        self.reloaded = [0] * n           # reloads done per point
         self.reload_pool = ThreadPoolExecutor(max_workers=8)
+        self.own_input_end = 0
+        self.user_input = kernel32.GetTickCount()   # count idle time from when you pressed Start
+        hidden = []
         winmm.timeBeginPeriod(1)  # 1 ms timer precision for accurate CPS
         try:
+            if self.cfg["window_mode"] == MODE_SWITCH and self.cfg["see_through"]:
+                for hwnd in {t.root for t in points if t.kind == "window" and t.root}:
+                    hidden.append((hwnd, make_see_through(hwnd)))
             if self.cfg["together"]:
                 self.run_together()
             else:
                 self.run_in_order()
         finally:
+            for hwnd, style in hidden:
+                try:
+                    restore_window(hwnd, style)
+                except Exception:
+                    pass
             winmm.timeEndPeriod(1)
             self.reload_pool.shutdown(wait=False)
 
@@ -984,7 +1054,10 @@ class Clicker(threading.Thread):
 
     def due_for_reload(self, i, per_point):
         t = self.cfg["points"][i]
-        return t.reload_every and per_point[i] % t.reload_every == 0
+        if not t.reload_every or per_point[i] // t.reload_every <= self.reloaded[i]:
+            return False
+        self.reloaded[i] = per_point[i] // t.reload_every
+        return True
 
     # --- one point after another
     def run_in_order(self):
@@ -1012,7 +1085,8 @@ class Clicker(threading.Thread):
                 self.status = f"Stopped: window for point {chosen + 1} was closed"
                 return
             try:
-                self.press(t)
+                made = self.press(t)
+                made = 1 if made is None else made
             except SkipClick as e:
                 self.status = f"Waiting: {e}"
                 if self.stop_evt.wait(0.05):
@@ -1025,9 +1099,11 @@ class Clicker(threading.Thread):
                     break
                 continue
 
-            self.clicks += 1
-            batch += 1
-            per_point[chosen] += 1
+            if not made:
+                continue
+            self.clicks += made
+            batch += made
+            per_point[chosen] += made
 
             if c["limit"] and self.clicks >= c["limit"]:
                 self.status = "Done"
@@ -1044,7 +1120,7 @@ class Clicker(threading.Thread):
                 next_t = time.perf_counter()
                 continue
 
-            next_t, stopped = self.wait_next(next_t, interval)
+            next_t, stopped = self.wait_next(next_t, interval * made)   # keep the average speed
             if stopped:
                 break
         self.status = "Stopped"
@@ -1073,23 +1149,25 @@ class Clicker(threading.Thread):
         next_t = time.perf_counter()
 
         def attempt(i):
+            """How many clicks point i got (0 if none)."""
             try:
-                self.press(points[i])
-                return True
+                made = self.press(points[i])
+                return 1 if made is None else made
             except SkipClick as e:
                 self.status = f"Waiting: {e}"
-                return False
+                return 0
             except Exception as e:
                 self.last_error = f"point {i + 1}: {e or e.__class__.__name__}"
-                return False
+                return 0
 
         def click_group(idxs):
             done = []
             for i in idxs:
                 if self.stop_evt.is_set():
                     break
-                if attempt(i):
-                    done.append(i)
+                made = attempt(i)
+                if made:
+                    done.append((i, made))
             return done
 
         try:
@@ -1110,11 +1188,13 @@ class Clicker(threading.Thread):
                 ready_set = set(ready)
                 futures = [pool.submit(click_group, [i for i in idxs if i in ready_set])
                            for idxs in groups.values() if any(i in ready_set for i in idxs)]
-                ok = sorted(i for f in futures for i in f.result())
+                results = sorted(x for f in futures for x in f.result())
+                ok = [i for i, _ in results]
+                most = max((made for _, made in results), default=1)
 
-                self.clicks += len(ok)
-                for i in ok:
-                    per_point[i] += 1
+                self.clicks += sum(made for _, made in results)
+                for i, made in results:
+                    per_point[i] += made
                 if not ok:
                     if self.stop_evt.wait(0.05 if self.status.startswith("Waiting") else 0.5):
                         break
@@ -1142,7 +1222,7 @@ class Clicker(threading.Thread):
                     next_t = time.perf_counter()
                     continue
 
-                next_t, stopped = self.wait_next(next_t, interval)
+                next_t, stopped = self.wait_next(next_t, interval * most)
                 if stopped:
                     break
             self.status = "Stopped"
@@ -1290,6 +1370,7 @@ class App:
         self.capturing = None              # action waiting for a new hotkey
 
         root.title("Ghost Auto Clicker")
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.set_icon()
         root.minsize(940, 560)
         self.apply_theme()
@@ -1485,8 +1566,8 @@ class App:
                 (MODE_POST, "Background", "Window can be behind others, your mouse stays free"),
                 (MODE_GAME, "Background for games", "Also tells the window it's active. Try this first for a game"),
                 (MODE_SWITCH, "Quick switch (games like Roblox)",
-                 "Brings the game forward for a split second per click, then\n"
-                 "puts your window and mouse back. Use 1-5 clicks a second"),
+                 "Brings the game forward for a split second, clicks, then puts\n"
+                 "your window and mouse back. Settings: Quick switch tab"),
                 (MODE_FOREGROUND, "Foreground", "Moves your real mouse, works with everything")):
             ttk.Radiobutton(p, text=title, variable=self.window_mode,
                             value=mode).grid(row=r, column=0, columnspan=3, sticky="w", pady=(2 if r == 1 else 8, 0))
@@ -1502,16 +1583,37 @@ class App:
         self.field(p, r + 2, "Reload using", ttk.Combobox(p, textvariable=self.reload_method,
                                                           values=[RELOAD_CMD, RELOAD_F5], state="readonly",
                                                           width=22))
-        self.focus_wait = tk.StringVar(value="60")
-        wait_box = ttk.Frame(p)
-        ttk.Spinbox(wait_box, from_=0, to=1000, increment=10, textvariable=self.focus_wait,
-                    width=8).pack(side="left")
-        ttk.Label(wait_box, text="ms", style="Muted.TLabel").pack(side="left", padx=(6, 0))
-        self.field(p, r + 3, "Quick switch wait", wait_box)
         ttk.Button(p, text="Restart browser with background clicking",
-                   command=self.launch_browser).grid(row=r + 4, column=0, columnspan=3, sticky="w", pady=(12, 4))
-        self.note(p, r + 5, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
+                   command=self.launch_browser).grid(row=r + 3, column=0, columnspan=3, sticky="w", pady=(12, 4))
+        self.note(p, r + 4, "Stops the browser from pausing pages you can't see. Uses the browser chosen on "
                             "the Browser tabs page.")
+
+        # Quick switch (games like Roblox)
+        p = self.page(nb, "Quick switch")
+        self.note(p, 0, "For window points when “Quick switch” is chosen on the Windows tab.")
+        self.section(p, 1, "Stay out of your way")
+        self.idle_only = tk.BooleanVar(value=True)
+        ttk.Checkbutton(p, text="Only click when I'm not using the computer",
+                        variable=self.idle_only).grid(row=2, column=0, columnspan=3, sticky="w", pady=2)
+        self.idle_secs = tk.StringVar(value="0.5")
+        self.field(p, 3, "Idle for at least", ttk.Spinbox(p, from_=0.1, to=60, increment=0.1,
+                                                          textvariable=self.idle_secs, width=8), "seconds")
+        self.burst = tk.StringVar(value="1")
+        self.field(p, 4, "Clicks per switch", ttk.Spinbox(p, from_=1, to=50, textvariable=self.burst, width=8))
+        self.note(p, 5, "More clicks per switch means fewer switches. The average speed stays the same.")
+        self.section(p, 6, "Timing")
+        self.focus_wait = tk.StringVar(value="100")
+        self.field(p, 7, "Max wait for the game", ttk.Spinbox(p, from_=0, to=1000, increment=10,
+                                                              textvariable=self.focus_wait, width=8), "ms")
+        self.note(p, 8, "Clicks as soon as the game is in front, waiting at most this long. Raise it if "
+                        "clicks are missed.")
+        self.section(p, 9, "Experimental")
+        self.see_through = tk.BooleanVar(value=False)
+        ttk.Checkbutton(p, text="Make the game see-through while clicking",
+                        variable=self.see_through).grid(row=10, column=0, columnspan=3, sticky="w", pady=2)
+        self.note(p, 11, "Hides the flash when the game comes forward. You can't see the game until you "
+                         "press Stop. If this app is closed while clicking and the game stays see-through, "
+                         "restart the game.")
 
         # Hotkeys
         p = self.page(nb, "Hotkeys")
@@ -1541,6 +1643,12 @@ class App:
                         "other apps. Letter and number hotkeys are ignored while you type in this window.")
 
         self.update_speed_hint()
+
+    def on_close(self):
+        if self.clicker:
+            self.clicker.stop()
+            self.clicker.join(2)   # lets it put a see-through game back
+        self.root.destroy()
 
     def set_icon(self):
         try:
@@ -2116,6 +2224,8 @@ class App:
                 "hold": float(self.hold.get() or 0) / 1000.0,
                 "jitter": int(float(self.jitter.get() or 0)),
                 "focus_wait": float(self.focus_wait.get() or 0) / 1000.0,
+                "idle_secs": float(self.idle_secs.get() or 0),
+                "burst": max(1, int(float(self.burst.get() or 1))),
             }
             if min(cfg.values()) < 0 or cfg["cps"] <= 0:
                 raise ValueError
@@ -2128,7 +2238,8 @@ class App:
             own = None
         cfg.update(points=list(self.points) or [CursorPoint(own)], right=self.button.get() == "Right",
                    window_mode=self.window_mode.get(), background=self.window_mode.get() != MODE_FOREGROUND,
-                   method=self.method.get(),
+                   method=self.method.get(), idle_only=self.idle_only.get(),
+                   see_through=self.see_through.get(),
                    reload_method=self.reload_method.get(), tab_method=self.tab_method.get(),
                    together=self.together.get())
 
@@ -2157,8 +2268,8 @@ class App:
                     "Auto Clicker",
                     "Quick switch brings the game window to the front for a split second on every click, "
                     "then switches back to what you were doing and puts your mouse back.\n\n"
-                    "Use a low speed (1-5 clicks a second), and don't minimize the game. While it's clicking, "
-                    "a key you press at that moment can land in the game."):
+                    "Don't minimize the game. Settings for staying out of your way are on the "
+                    "Quick switch tab."):
                 return
             self.switch_warned = True
         if has_window and not cfg["background"] and not getattr(self, "fg_warned", False):
